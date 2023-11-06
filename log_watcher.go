@@ -17,7 +17,10 @@ import (
 type Event struct {
 	e    LogFileEvent
 	meta *LogMeta
-	// opt   interface{} // not used currently
+}
+
+func(e Event) String() string {
+	return fmt.Sprintf("[ %v, %v, %v ] ", e.e, e.meta.path, e.meta.fMeta.Inode)
 }
 
 type LogFileEvent uint64
@@ -53,7 +56,6 @@ type LogMeta struct {
 	Dir     string
 	Pattern string
 	path    string
-	id      uint32
 	LogInfo os.FileInfo
 	fMeta   *FileMeta
 }
@@ -85,21 +87,28 @@ type LogWatcher struct {
 	windows        map[string]uint64       // filepath -> window  two fsnotify op, new op in low bits, file path -> window
 	eventFilter    map[string]LogFileEvent // filepath -> event, fifo
 	lastSentTs     time.Time
-	filterInterval int
+	filterInterval time.Duration
+	pollerInterval time.Duration
 }
 
-func NewLogWatcher(filterInterval int) *LogWatcher {
+type LogWatchOption struct {
+	FilterInterval time.Duration
+	PollerInterval time.Duration
+}
+
+func NewLogWatcher(option *LogWatchOption) *LogWatcher {
 	return &LogWatcher{
 		nextID:         0,
 		pathMap:        make(map[uint32]string),
 		EventC:         make(chan *Event),
 		logMetas:       make(map[string]*LogMeta), // path -> LogMeta
 		windows:        map[string]uint64{},
-		closeC:         make(chan struct{}),
-		pollerCloseC:   make(chan struct{}),
+		closeC:         nil,
+		pollerCloseC:   nil,
 		lastSentTs:     time.Now().UTC().Local(),
 		eventFilter:    make(map[string]LogFileEvent),
-		filterInterval: filterInterval,
+		filterInterval: option.FilterInterval,
+		pollerInterval: option.PollerInterval,
 	}
 }
 
@@ -123,6 +132,13 @@ func (lw *LogWatcher) RunEventHandler() {
 
 // eventHandler
 func (lw *LogWatcher) eventHandler() {
+	logger.Info("[Backgroud] eventHandler Start")
+	defer logger.Info("[Backgroud] eventHandler Exit")
+
+	if lw.closeC == nil {
+		lw.closeC = make(chan struct{})
+	}
+
 	for {
 		select {
 		case <-lw.closeC:
@@ -136,13 +152,13 @@ func (lw *LogWatcher) eventHandler() {
 			lw.windows[e.Name] <<= WindowSize
 			lw.windows[e.Name] |= uint64(e.Op)
 			if err := lw.handleEvent(e.Name, eventTransform(lw.windows[e.Name])); err != nil {
-				log.Printf("eventHandler handle event, err %v\n",err.Error())
+				log.Printf("eventHandler handle event, err %v\n", err.Error())
 			}
 		case err, ok := <-lw.watcher.Errors:
 			if !ok {
 				break
 			}
-			log.Printf("LogWatcher meet error %v\n",err.Error())
+			log.Printf("LogWatcher meet error %v\n", err.Error())
 			return
 		}
 	}
@@ -151,7 +167,14 @@ func (lw *LogWatcher) eventHandler() {
 // poller is a goroutine runing in poll mode. it deals with some unexpected situation, such as handle event failure or remove event.
 // interval should be larger.
 func (lw *LogWatcher) poller() {
-	poll_ticker := time.NewTicker(5 * time.Minute)
+	logger.Info("[Backgroud] poller Start")
+	defer logger.Info("[Backgroud] poller End")
+
+	if lw.pollerCloseC == nil {
+		lw.pollerCloseC = make(chan struct{})
+	}
+	poll_ticker := time.NewTicker(lw.pollerInterval)
+
 	defer poll_ticker.Stop()
 	for {
 		select {
@@ -230,7 +253,7 @@ func (lw *LogWatcher) sendEvent(e LogFileEvent, meta *LogMeta) {
 	lastEvent, ok := lw.eventFilter[meta.path]
 	defer func() { lw.eventFilter[meta.path] = e }()
 	if ok && lastEvent == e {
-		if time.Since(lw.lastSentTs) < (time.Second * time.Duration(lw.filterInterval)) { // can be optimized by making a imprecise interval [interval-1，interval + 1], but current having it precisely.
+		if time.Since(lw.lastSentTs) < lw.filterInterval { // can be optimized by making a imprecise interval [interval-1，interval + 1], but current having it precisely.
 			// less than interval and same as last sent event, do not send
 			// log.Debug("sendEvent, event lasting, but not trigger")
 			return
@@ -299,7 +322,6 @@ func (lw *LogWatcher) genLogMeta(logFile fs.FileInfo, path, dir, pattern string)
 		Dir:     dir,
 		Pattern: pattern,
 		path:    path,
-		id:      lw.nextID,
 		LogInfo: logFile,
 		fMeta: &FileMeta{
 			fd:    fd,
@@ -345,10 +367,10 @@ func (lw *LogWatcher) RegisterAndWatch(dir, pattern string) error {
 }
 
 func (lw *LogWatcher) Close() {
+	logger.Debug("Close Start")
+	defer logger.Debug("Close End")
 	// clear up resouse
 	// opened files, watcher, goroutines
-	// log.Info("LogWatcher begin Close")
-	// defer log.Info("LogWatcher finish Close")
 	for _, v := range lw.logMetas {
 		if v.fMeta.fd != nil {
 			v.fMeta.fd.Close()
@@ -356,10 +378,13 @@ func (lw *LogWatcher) Close() {
 	}
 
 	if lw.watcher != nil {
-		// log.Info("FileWatcher begin Close")
 		lw.watcher.Close()
-		// log.Info("FileWatcher finish Close")
 	}
-	lw.closeC <- struct{}{}
-	lw.pollerCloseC <- struct{}{}
+
+	if lw.closeC != nil {
+		lw.closeC <- struct{}{}
+	}
+	if lw.pollerCloseC != nil {
+		lw.pollerCloseC <- struct{}{}
+	}
 }

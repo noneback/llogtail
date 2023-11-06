@@ -48,7 +48,6 @@ type LogConf struct {
 	Pattern  string `json:"pattern"`
 	LineSep  string `json:"lineSeperator"`
 	FieldSep string `json:"fieldSeperator"`
-	File     string `json:"file"`
 }
 
 type Checkpoint struct {
@@ -140,7 +139,10 @@ func NewLogCollector(opt *LogCollectorOption) *LogCollector {
 
 	return &LogCollector{
 		readers:       make(map[string]*queue.Queue),
-		watcher:       *NewLogWatcher(filterInterval),
+		watcher:       *NewLogWatcher(&LogWatchOption{
+			FilterInterval:time.Second*time.Duration(filterInterval),
+			PollerInterval:time.Minute*5,
+		}),
 		buf:           NewBlockingBuffer(bufferSize),
 		cpts:          make(map[string]*Checkpoint),
 		running:       false,
@@ -236,7 +238,7 @@ func (lc *LogCollector) makeCheckpoint(path string, meta *FileMeta, offset uint6
 		return fmt.Errorf("makeCheckpoint write cpt file %v -> %w", path, err)
 	}
 	lc.cpts[path] = cpt
-	log.Println("makeCheckpoint success, path %v, file %v",path, meta.fd.Name())
+	// log.Println("makeCheckpoint success, path %v, file %v",path, meta.fd.Name())
 	return nil
 }
 

@@ -12,12 +12,24 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/eapache/queue"
 	"github.com/fsnotify/fsnotify"
+	"github.com/op/go-logging"
 )
+
+var logger *logging.Logger
+var defauleLogOption = LogOption  {
+	Verbose: true,
+	Level: logging.DEBUG,
+}
+
+func init() {
+	// InitLogger(&defauleLogOption)
+}
 
 
 func genFileSign(file *os.File) (*[16]byte, error) {
@@ -38,7 +50,7 @@ func findFiles(dir, pattern string) ([]fs.FileInfo, []string, error) {
 	pattern = filepath.Base(pattern)
 
 	// find all matched log
-	pathList, err := walkDirs(dir, depth, func(p string) bool {
+	pathList, err := WalkDirs(dir, depth, func(p string) bool {
 		flag, err := filepath.Match(pattern, p)
 		if err != nil {
 			return false
@@ -133,7 +145,7 @@ func validateCpt(cpt *Checkpoint, meta *LogMeta) bool {
 // WalkDirs walks dir with depth, and filter matched dir
 // filter,p is dir or file name
 // hook is called when a file is matched
-func walkDirs(dir string, depth int, filter func(p string) bool, hook func(fs fs.FileInfo)) ([]string, error) {
+func WalkDirs(dir string, depth int, filter func(p string) bool, hook func(fs fs.FileInfo)) ([]string, error) {
 	matchedDirs := make([]string, 0, 50)
 	level := 1
 	q := queue.New() // only store dir path
@@ -189,4 +201,27 @@ func Retry(times int, interval time.Duration, method func() error) error {
 		time.Sleep(interval)
 	}
 	return nil
+}
+
+
+type LogOption struct {
+	Verbose bool
+	Level logging.Level
+}
+
+func InitLogger(opt *LogOption) {
+	if !opt.Verbose {
+		return;
+	}
+	
+	var once sync.Once
+	once.Do(
+		func() {
+			logging.SetFormatter(logging.MustStringFormatter(
+				`%{time:2006-01-02 15:04:05} %{shortfunc} ▶ %{level:.4s} %{message}`,
+			))
+			logging.SetLevel(opt.Level,"")
+			logger = logging.MustGetLogger("llogtail")
+		},
+	)
 }
