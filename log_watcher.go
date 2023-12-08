@@ -84,7 +84,7 @@ type LogWatcher struct {
 	nextID         uint32
 	closeC         chan struct{}
 	pollerCloseC   chan struct{}
-	windows        map[string]uint64       // filepath -> window  two fsnotify op, new op in low bits, file path -> window
+	// windows        map[string]uint64       // filepath -> window  two fsnotify op, new op in low bits, file path -> window
 	eventFilter    map[string]LogFileEvent // filepath -> event, fifo
 	lastSentTs     time.Time
 	filterInterval time.Duration
@@ -102,7 +102,7 @@ func NewLogWatcher(option *LogWatchOption) *LogWatcher {
 		pathMap:        make(map[uint32]string),
 		EventC:         make(chan *Event),
 		logMetas:       make(map[string]*LogMeta), // path -> LogMeta
-		windows:        map[string]uint64{},
+		// windows:        map[string]uint64{},
 		closeC:         nil,
 		pollerCloseC:   nil,
 		lastSentTs:     time.Now().UTC().Local(),
@@ -132,8 +132,8 @@ func (lw *LogWatcher) RunEventHandler() {
 
 // eventHandler
 func (lw *LogWatcher) eventHandler() {
-	logger.Info("[Backgroud] eventHandler Start")
-	defer logger.Info("[Backgroud] eventHandler Exit")
+	logger.Notice("[Backgroud] eventHandler Start")
+	defer logger.Notice("[Backgroud] eventHandler Exit")
 
 	if lw.closeC == nil {
 		lw.closeC = make(chan struct{})
@@ -142,23 +142,21 @@ func (lw *LogWatcher) eventHandler() {
 	for {
 		select {
 		case <-lw.closeC:
-			log.Println("LogWatcher close triggered")
+			logger.Notice("[eventHandler] close triggered")
 			return
 		case e, ok := <-lw.watcher.Events:
 			if !ok {
 				break
 			}
-			log.Printf("LogWatcher watcher.Events %v\n", e.Name)
-			lw.windows[e.Name] <<= WindowSize
-			lw.windows[e.Name] |= uint64(e.Op)
-			if err := lw.handleEvent(e.Name, eventTransform(lw.windows[e.Name])); err != nil {
-				log.Printf("eventHandler handle event, err %v\n", err.Error())
+			logger.Debugf("LogWatcher watcher.Events %v\n", e)
+			if err := lw.handleEvent(e.Name, eventTransform(e.Op)); err != nil {
+				logger.Errorf("eventHandler handle event, err %v\n", err.Error())
 			}
 		case err, ok := <-lw.watcher.Errors:
 			if !ok {
 				break
 			}
-			log.Printf("LogWatcher meet error %v\n", err.Error())
+			logger.Errorf("LogWatcher meet error %v\n", err.Error())
 			return
 		}
 	}
@@ -167,8 +165,8 @@ func (lw *LogWatcher) eventHandler() {
 // poller is a goroutine runing in poll mode. it deals with some unexpected situation, such as handle event failure or remove event.
 // interval should be larger.
 func (lw *LogWatcher) poller() {
-	logger.Info("[Backgroud] poller Start")
-	defer logger.Info("[Backgroud] poller End")
+	logger.Notice("[Backgroud] poller Start")
+	defer logger.Notice("[Backgroud] poller End")
 
 	if lw.pollerCloseC == nil {
 		lw.pollerCloseC = make(chan struct{})
@@ -179,19 +177,20 @@ func (lw *LogWatcher) poller() {
 	for {
 		select {
 		case <-poll_ticker.C:
-			log.Println("poll_ticker trigger")
+			logger.Debug("poll_ticker trigger")
 			// poller based on pattern
 			// path from meta
-			for _, meta := range lw.logMetas {
-				if err := lw.handleRenameRotate(meta); err != nil {
-					// log.Error("[poller] handle poller task failed", log.String("err", err.Error()))
-					continue
-				} // handle it as a rename event
-				// log.Info("[poller] handle poll_ticker task success", log.String("file", meta.path))
-			}
+
+			// for _, meta := range lw.logMetas {
+			// 	if err := lw.handleRenameRotate(meta); err != nil {
+			// 		logger.Error("[poller] handle poller task failed", err)
+			// 		continue
+			// 	} // handle it as a rename event
+			// 	logger.Infof("[poller] handle poll_ticker task success, file %v",  meta.path)
+			// }
 
 		case <-lw.pollerCloseC:
-			log.Println("poller Close")
+			logger.Notice("poller Close")
 			return
 		}
 	}
@@ -202,6 +201,7 @@ func (lw *LogWatcher) poller() {
 // Commonly, a log do not removed but rather be renamed or copied or truncated
 // We just set a removed flag and leave it to upper layer to solve.
 func (lw *LogWatcher) handleRemoved(meta *LogMeta) error {
+	defer logger.Notice("handle remove", meta.path)
 	lw.sendEvent(LogFileRemove, meta)
 	return nil
 }
@@ -354,35 +354,39 @@ func (lw *LogWatcher) RegisterAndWatch(dir, pattern string) error {
 
 		// log.Info("Register Log File", log.String("file", path))
 		lw.logMetas[path] = meta
-		lw.windows[path] = uint64(0) // for event handling
+		// lw.windows[path] = uint64(0) // for event handling
 		if err = lw.watcher.Add(path); err != nil {
 			return fmt.Errorf("[RegisterAndWatch] Add file %v to watcher failed -> %w", logFile.Name(), err)
 		}
-		// log.Debug("[RegisterAndWatch] file registerd", log.String("file", path))
+		logger.Debug("[RegisterAndWatch] file registerd", path)
 		lw.pathMap[lw.nextID] = path
 		lw.nextID++
-		lw.sendEvent(LogFileDiscover, lw.logMetas[path]) // inform uppper layer
+		defer lw.sendEvent(LogFileDiscover, lw.logMetas[path]) // NOTICE: Defer make sure inform uppper layer is in batch
 	}
 	return nil
 }
 
 func (lw *LogWatcher) Close() {
-	logger.Debug("Close Start")
-	defer logger.Debug("Close End")
+	logger.Debug("[LogWatcher] Close Start")
+	defer logger.Debug("[LogWatcher] Close End")
 	// clear up resouse
 	// opened files, watcher, goroutines
 	for _, v := range lw.logMetas {
 		if v.fMeta.fd != nil {
+			logger.Debug("[LogWatcher] File Close:", v.path, v.fMeta.Inode)
 			v.fMeta.fd.Close()
 		}
 	}
 
 	if lw.watcher != nil {
 		lw.watcher.Close()
+		logger.Debug("[LogWatcher] fsnitify watcher close")
 	}
 
 	if lw.closeC != nil {
+		logger.Debug("[LogWatcher] handleEvent close start")
 		lw.closeC <- struct{}{}
+		logger.Debug("[LogWatcher] handleEvent close")
 	}
 	if lw.pollerCloseC != nil {
 		lw.pollerCloseC <- struct{}{}

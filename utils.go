@@ -110,19 +110,17 @@ func detectNewFile(path string, fInfo os.FileInfo, old *LogMeta) (*FileMeta, err
 	return newFileMeta, nil
 }
 
-func eventTransform(window uint64) LogFileEvent {
-	if window&uint64(fsnotify.Rename) == uint64(fsnotify.Rename) {
-		return LogFileRenameRotate
+func eventTransform(opkind fsnotify.Op) LogFileEvent {
+	transformer := map[fsnotify.Op] LogFileEvent {
+		fsnotify.Rename:LogFileRenameRotate,
+		fsnotify.Remove:LogFileRemove,
+		fsnotify.Write:LogFileModify,
+		fsnotify.Chmod:LogFileChomd,
 	}
-	if window&uint64(fsnotify.Remove) == uint64(fsnotify.Remove) {
-		return LogFileRemove
+	if t, ok := transformer[opkind];ok {
+		return t
 	}
-	if window&uint64(fsnotify.Write) == uint64(fsnotify.Write) {
-		return LogFileModify
-	}
-	if window&uint64(fsnotify.Chmod) == uint64(fsnotify.Chmod) {
-		return LogFileChomd
-	}
+
 	return LogFileEventNotEncoded
 }
 
@@ -218,7 +216,7 @@ func InitLogger(opt *LogOption) {
 	once.Do(
 		func() {
 			logging.SetFormatter(logging.MustStringFormatter(
-				`%{time:2006-01-02 15:04:05} %{shortfunc} ▶ %{level:.4s} %{message}`,
+				`%{time:2006-01-02 15:04:05} %{color}%{shortfunc} ▶ %{level:.8s} %{message}%{color:reset}`,
 			))
 			logging.SetLevel(opt.Level,"")
 			logger = logging.MustGetLogger("llogtail")

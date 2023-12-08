@@ -2,145 +2,266 @@ package llogtail
 
 import (
 	"fmt"
-	"log"
+	"math/rand"
 	"os"
-	"path/filepath"
+	"os/exec"
 	"testing"
 	"time"
 
-	"github.com/op/go-logging"
+	"github.com/eapache/queue"
 )
 
-var (
-	testlog      *log.Logger
-	oneKBLine    []byte
-	oneMBLine    []byte
-	waitToClear  []clear
-	receivedMeta map[LogFileEvent][]*LogMeta
-)
+var kWatcherCloseC chan struct{}
 
-type clear struct {
+type kSimEvent struct {
 	path string
-	fd   *os.File
+	// inode int
+	e LogFileEvent
 }
 
-func init() {
-	receivedMeta = make(map[LogFileEvent][]*LogMeta)
-	testlog = log.Default()
-	testlog.SetPrefix("[W] ")
-	testlog.SetFlags(log.Lshortfile)
-	oneMBLine = make([]byte, MB)
-	oneKBLine = make([]byte, KB)
-	for i := 0; i < MB; i++ {
-		oneMBLine[i] = byte('a')
+type EventReceiver struct {
+	eventQ map[string]*queue.Queue
+	closeC chan struct{}
+	eventC chan *Event
+}
+
+func NewEventReceiver(eventC chan *Event) *EventReceiver {
+	return &EventReceiver{
+		eventQ: make(map[string]*queue.Queue),
+		closeC: make(chan struct{}),
+		eventC: eventC,
 	}
-	for i := 0; i < KB; i++ {
-		oneKBLine[i] = byte('a')
-		if i+1 == KB {
-			oneKBLine[i] = byte('\n')
+}
+
+func (er *EventReceiver) Run() {
+	logger.Notice("Receive Backgroud Task Start")
+	go func() {
+		for {
+			select {
+			case e := <-er.eventC:
+				logger.Info("ReceiveQ <= ", e.String())
+				if _, ok := er.eventQ[e.meta.path]; !ok {
+					er.eventQ[e.meta.path] = queue.New()
+				}
+				er.eventQ[e.meta.path].Add(e)
+			case <-er.closeC:
+				logger.Notice("Receive Backgroud Task Exit")
+				return
+			}
+		}
+	}()
+}
+
+func (er *EventReceiver) Match(events []kSimEvent) error {
+	for _, kEvent := range events {
+		q, ok := er.eventQ[kEvent.path]
+		if !ok {
+			return fmt.Errorf("Path %v not found in Receiver", kEvent.path)
+		}
+		if q.Length() <= 0 {
+			return fmt.Errorf("EventQ %v Empty, expect %v", kEvent.path, kEvent.e)
+		}
+
+		event, _ := q.Remove().(*Event)
+		if event.e != kEvent.e {
+			return fmt.Errorf("%v, expect %v, actual %v", kEvent.path, kEvent, event.e)
 		}
 	}
+
+	return nil
 }
 
-func makeLine(line []byte, ch byte) {
-	for i := 0; i < KB; i++ {
-		line[i] = byte(ch)
-		if i+1 == KB {
-			oneKBLine[i] = byte('\n')
-		}
+func (er *EventReceiver) Stop() {
+	er.closeC <- struct{}{}
+}
+
+func Pre() {
+	InitLogger(&defauleLogOption)
+	shell := `rm -rf tests && mkdir -p tests && cd tests && touch error.log warn.log info.log`
+	_, err := exec.Command("sh", "-c", shell).Output()
+	if err != nil {
+		panic("Pre -> " + err.Error())
 	}
+	logger.Notice("Pre Success")
 }
 
-type WatcherConfig struct {
-	running      bool
-	watcher      *LogWatcher
-	t            *testing.T
-	files        []string
-	pattern, dir string
-	eventC       chan *Event
-	closeC       chan struct{}
-}
+func TestLogWatcher(t *testing.T) {
+	Pre()
+	dir, pattern := "tests", "*.log"
+	var receiver *EventReceiver
 
-const kTestDir = "./tests"
+	watcher := NewLogWatcher(
+		&LogWatchOption{
+			FilterInterval: time.Microsecond * 300,
+			PollerInterval: time.Second,
+		},
+	)
 
-func (cfg *WatcherConfig) eventReceiver() {
-	logger.Info("[Background] Start EventReceiver")
-	defer logger.Info("[Background] EventReceiver Exit")
-	for cfg.running  {
-		select {
-		case e := <-cfg.watcher.EventC:
-			logger.Info("Receive -> ", e)
-		case <-cfg.closeC:
-			return
+	t.Run("Test Watcher Init", func(t *testing.T) {
+		if err := watcher.Init(); err != nil {
+			logger.Errorf("Watcher Init -> %w", err)
+			t.FailNow()
 		}
-	}
-}
-
-func (cfg *WatcherConfig) EventReceiver() {
-	go cfg.eventReceiver()
-}
-
-func (cfg *WatcherConfig) init() {
-	InitLogger(&LogOption{
-		true, logging.DEBUG,
 	})
-	cfg.running = true
-	cfg.watcher = NewLogWatcher(&LogWatchOption{
-		time.Second * 10, time.Minute * 5,
-	})
-	if err := cfg.watcher.Init(); err != nil {
-		logger.Errorf("LogWatcher ->", err)
-		cfg.t.FailNow()
-	}
+	receiver = NewEventReceiver(watcher.EventC)
+	receiver.Run()
+	watcher.RunEventHandler()
+	defer receiver.Stop()
+	defer watcher.Close()
 
-	testFiles := []string{
-		"warn.log", "info.log", "error.log",
-	}
-
-	for _, f := range testFiles {
-		path := filepath.Join(kTestDir, f)
-		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
-		if err != nil {
-			logger.Errorf("[init] OpenFile %v -> %w", path, err)
-			continue
+	t.Run("Test Watcher RegisterAndWatch", func(t *testing.T) {
+		if err := watcher.RegisterAndWatch(dir, pattern); err != nil {
+			logger.Errorf("Watcher RegisterAndWatch -> %w", err)
+			t.FailNow()
 		}
-		// 关闭文件
-		defer f.Close()
+		time.Sleep(time.Microsecond * 200)
+		expected := []kSimEvent{
+			{
+				"tests/error.log", LogFileDiscover,
+			}, {
+				"tests/info.log", LogFileDiscover,
+			}, {
+				"tests/warn.log", LogFileDiscover,
+			},
+		}
+		if err := receiver.Match(expected); err != nil {
+			logger.Error("Event not Match", err)
+			t.FailNow()
+		}
+	})
+	logs := []string{
+		"tests/error.log", "tests/info.log", "tests/warn.log",
 	}
-	cfg.files = testFiles
-	cfg.dir, cfg.pattern = kTestDir, "*.log"
+	t.Run("Test Watch Modify Event", func(t *testing.T) {
+		for _, logf := range logs {
+			modify(logf, kDataOneKB)
+		}
+		time.Sleep(time.Millisecond * 100)
+		if err := receiver.Match([]kSimEvent{
+			{
+				"tests/error.log", LogFileModify,
+			}, {
+				"tests/info.log", LogFileModify,
+			}, {
+				"tests/warn.log", LogFileModify,
+			},
+		}); err != nil {
+			logger.Error("Event not Match", err)
+			t.FailNow()
+		}
+	})
 
-	// start event reveiver
-	cfg.EventReceiver()
-	cfg.watcher.RunEventHandler()
+	t.Run("Test Watch Rename Rorate Event", func(t *testing.T) {
+		for _, logf := range logs {
+			// modify(logf,kDataOneKB)
+			rotate(logf)
+		}
+		time.Sleep(time.Millisecond * 100)
+		if err := receiver.Match([]kSimEvent{
+			{
+				"tests/error.log", LogFileRenameRotate,
+			}, {
+				"tests/info.log", LogFileRenameRotate,
+			}, {
+				"tests/warn.log", LogFileRenameRotate,
+			},
+		}); err != nil {
+			logger.Error("Event not Match", err)
+			t.FailNow()
+		}
+	})
+
+	t.Run("Test Watch Modify After Rename Rorate Event", func(t *testing.T) {
+		for _, logf := range logs {
+			modify(logf, kDataOneKB)
+			// rotate(logf)
+		}
+		time.Sleep(time.Millisecond * 100)
+		if err := receiver.Match([]kSimEvent{
+			{
+				"tests/error.log", LogFileModify,
+			}, {
+				"tests/info.log", LogFileModify,
+			}, {
+				"tests/warn.log", LogFileModify,
+			},
+		}); err != nil {
+			logger.Error("Event not Match", err)
+			t.FailNow()
+		}
+	})
+
+	t.Run("Test Watch Remove Event", func(t *testing.T) {
+		for _, logf := range logs {
+			remove(logf)
+		}
+		time.Sleep(time.Millisecond * 100)
+		if err := receiver.Match([]kSimEvent{
+			{
+				"tests/error.log", LogFileRemove,
+			}, {
+				"tests/info.log", LogFileRemove,
+			}, {
+				"tests/warn.log", LogFileRemove,
+			},
+		}); err != nil {
+			logger.Error("Event not Match", err)
+			t.FailNow()
+		}
+	})
+
 }
 
-func (cfg *WatcherConfig) doTest() {}
+var kDataOneKB = generateDataOneKB()
 
-func (cfg *WatcherConfig) close() {
-	cfg.watcher.Close()
-	cfg.closeC <- struct{}{}
-	cfg.running = false
+// generateDataOneKB generates 1KB of random data
+func generateDataOneKB() []byte {
+	rand.NewSource(time.Now().UnixNano())
+	data := make([]byte, 1024) // 1KB = 1024 Bytes
+	for i := range data {
+		data[i] = byte(rand.Intn(256)) // Random byte value between 0-255
+	}
+	return data
 }
 
-func (cfg *WatcherConfig) testRegisterFile() {
-	banner("#####", "testRegisterFile start")
-	defer banner("#####", "testRegisterFile end")
-	if err := cfg.watcher.RegisterAndWatch(kTestDir, cfg.pattern); err != nil {
-		logger.Errorf("RegisterAndWatch -> %w", err)
+// modify 文件内容修改函数
+func modify(path string, newData []byte) {
+	if err := os.WriteFile(path, newData, 0644); err != nil {
+		logger.Errorf("modify %v", path)
+		panic(err)
 	}
 }
 
-func TestMain(t *testing.T) {
-	cfg := WatcherConfig{
-		t: t,
+func rename(oldPath, newPath string) {
+	if err := os.Rename(oldPath, newPath); err != nil {
+		logger.Errorf("rename %v -> %v", oldPath, newPath)
+		panic(err)
 	}
-	cfg.init()
-	cfg.testRegisterFile()
-
-	defer cfg.close()
 }
 
-func banner(padding string, content string) {
-	fmt.Printf("\n[%v %v %v]\n\n", padding, content, padding)
+func remove(path string) {
+	if err := os.Remove(path); err != nil {
+		logger.Errorf("remove %v -> %v", path)
+		panic(err)
+	}
+}
+
+// rotateLogs 对指定的日志文件进行轮转
+func rotate(logPath string) error {
+	currentTime := time.Now()
+	newLogName := fmt.Sprintf("%s.%d-%02d-%02dT%02d-%02d-%02d",
+		logPath, currentTime.Year(), currentTime.Month(), currentTime.Day(),
+		currentTime.Hour(), currentTime.Minute(), currentTime.Second())
+
+	err := os.Rename(logPath, newLogName)
+	if err != nil {
+		return err
+	}
+
+	newFile, err := os.Create(logPath)
+	if err != nil {
+		return err
+	}
+	newFile.Close()
+	return nil
 }
