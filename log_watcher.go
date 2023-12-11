@@ -181,13 +181,13 @@ func (lw *LogWatcher) poller() {
 			// poller based on pattern
 			// path from meta
 
-			// for _, meta := range lw.logMetas {
-			// 	if err := lw.handleRenameRotate(meta); err != nil {
-			// 		logger.Error("[poller] handle poller task failed", err)
-			// 		continue
-			// 	} // handle it as a rename event
-			// 	logger.Infof("[poller] handle poll_ticker task success, file %v",  meta.path)
-			// }
+			for _, meta := range lw.logMetas {
+				if err := lw.handleRenameRotate(meta); err != nil { // action as it is a rename opt
+					logger.Error("[poller] handle poller task failed", err)
+					continue
+				} // handle it as a rename event
+				logger.Infof("[poller] handle poll_ticker task success, file %v",  meta.path)
+			}
 
 		case <-lw.pollerCloseC:
 			logger.Notice("poller Close")

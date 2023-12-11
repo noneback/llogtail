@@ -93,7 +93,7 @@ func TestLogWatcher(t *testing.T) {
 	watcher := NewLogWatcher(
 		&LogWatchOption{
 			FilterInterval: time.Microsecond * 300,
-			PollerInterval: time.Second,
+			PollerInterval: time.Second * 3,
 		},
 	)
 
@@ -174,7 +174,6 @@ func TestLogWatcher(t *testing.T) {
 	t.Run("Test Watch Modify After Rename Rorate Event", func(t *testing.T) {
 		for _, logf := range logs {
 			modify(logf, kDataOneKB)
-			// rotate(logf)
 		}
 		time.Sleep(time.Millisecond * 100)
 		if err := receiver.Match([]kSimEvent{
@@ -203,6 +202,25 @@ func TestLogWatcher(t *testing.T) {
 				"tests/info.log", LogFileRemove,
 			}, {
 				"tests/warn.log", LogFileRemove,
+			},
+		}); err != nil {
+			logger.Error("Event not Match", err)
+			t.FailNow()
+		}
+	})
+
+	t.Run("Test Watcher Poller", func(t *testing.T){
+		Pre()
+		logger.Notice("Sleep for Poller")
+		time.Sleep(4 * time.Second)
+
+		if err := receiver.Match([]kSimEvent{
+			{
+				"tests/error.log", LogFileRenameRotate,
+			}, {
+				"tests/info.log", LogFileRenameRotate,
+			}, {
+				"tests/warn.log", LogFileRenameRotate,
 			},
 		}); err != nil {
 			logger.Error("Event not Match", err)
@@ -265,3 +283,5 @@ func rotate(logPath string) error {
 	newFile.Close()
 	return nil
 }
+
+
