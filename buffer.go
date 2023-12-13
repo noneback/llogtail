@@ -2,12 +2,32 @@ package llogtail
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"math"
 	"os"
 	"sync"
 )
+
+type kDataUnit struct {
+	File    string `json:"file"`
+	Content []byte `json:"content"`
+}
+
+func encodeDataUnit(ctx *kTaskContext, content []byte) ([]byte, error) {
+	raw, err := json.Marshal(
+		&kDataUnit{
+			File:    ctx.meta.path,
+			Content: content,
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("marshal data unit -> %w", err)
+	}
+	return raw, nil
+}
 
 const (
 	DefaultLogBufferSize = MB + 1048
@@ -20,9 +40,9 @@ var (
 	ErrNoProgress = errors.New("Buffer Read From Line, No Prgress")
 )
 
-// Buffer is a thread-safe buffer, with blocking api.
+// BlockingBuffer is a thread-safe buffer, with blocking api.
 // It block itself when data is full
-type Buffer struct {
+type BlockingBuffer struct {
 	data       []byte
 	readBuffer []byte
 	offset     int
@@ -32,8 +52,8 @@ type Buffer struct {
 	init       bool
 }
 
-func NewBlockingBuffer(bufferSize int) *Buffer {
-	return &Buffer{
+func NewBlockingBuffer(bufferSize int) *BlockingBuffer {
+	return &BlockingBuffer{
 		offset: 0,
 		cap:    bufferSize,
 		full:   false,
@@ -42,12 +62,12 @@ func NewBlockingBuffer(bufferSize int) *Buffer {
 	}
 }
 
-func (b *Buffer) reset() {
+func (b *BlockingBuffer) reset() {
 	b.offset = 0
 }
 
 // Fetch fetch data in buf and notify Waited Write
-func (b *Buffer) Fetch() []byte {
+func (b *BlockingBuffer) Fetch() []byte {
 	defer b.cond.Broadcast()
 	b.cond.L.Lock()
 	defer b.cond.L.Unlock()
@@ -58,7 +78,7 @@ func (b *Buffer) Fetch() []byte {
 	return b.readBuffer[:offset]
 }
 
-func (b *Buffer) IfFullThenWait() {
+func (b *BlockingBuffer) IfFullThenWait() {
 	b.cond.L.Lock()
 	defer b.cond.L.Unlock()
 
@@ -69,7 +89,7 @@ func (b *Buffer) IfFullThenWait() {
 }
 
 // ReadLinesFrom make sure buffer read at least a line or none.
-func (b *Buffer) ReadLinesFrom(reader *os.File, lineSep string) (int, error) {
+func (b *BlockingBuffer) ReadLinesFrom(reader *os.File, lineSep string) (int, error) {
 	b.cond.L.Lock()
 	defer b.cond.L.Unlock()
 	// lazy loaded
@@ -118,7 +138,7 @@ func (b *Buffer) ReadLinesFrom(reader *os.File, lineSep string) (int, error) {
 // }
 
 // simple way, thread safe
-func (b *Buffer) enlarge() {
+func (b *BlockingBuffer) enlarge() {
 	old, new := len(b.data), len(b.data)*2
 	if old >= MaxBufferSize-1 {
 		return
@@ -137,7 +157,7 @@ func (b *Buffer) enlarge() {
 	b.cap = new
 }
 
-func (b *Buffer) Close() {
+func (b *BlockingBuffer) Close() {
 	b.data = nil
 	b.readBuffer = nil
 	b.init = false

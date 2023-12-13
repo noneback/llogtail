@@ -3,6 +3,7 @@ package llogtail
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -128,11 +129,11 @@ func eventTransform(opkind fsnotify.Op) LogFileEvent {
 func genCptPath(path string) string {
 	hash := md5.Sum([]byte(path))
 	checksum := []byte{hash[0], hash[1], hash[2], hash[3]}
-	cptPath := filepath.Join(OffsetDir, hex.EncodeToString(checksum)) + CheckpointFileExt
+	cptPath := filepath.Join(kOffsetDir, hex.EncodeToString(checksum)) + kCheckpointFileExt
 	return cptPath
 }
 
-func validateCpt(cpt *Checkpoint, meta *LogMeta) bool {
+func validateCpt(cpt *kCheckpoint, meta *LogMeta) bool {
 	if cpt.Meta.Dev == meta.fMeta.Dev && cpt.Meta.Inode == meta.fMeta.Inode && cpt.Offset <= uint64(meta.LogInfo.Size()) { // TODO: hash
 		return true
 	}
@@ -222,4 +223,40 @@ func InitLogger(opt *LogOption) {
 			logger = logging.MustGetLogger("llogtail")
 		},
 	)
+}
+
+// read checkpoint and store it in cpts
+// TODO: add reader queue into checkpoint
+func readCheckpoint(path string) (*kCheckpoint, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("readCheckpoint ReadFile %v -> %w", path, err)
+	}
+	cpt := &kCheckpoint{}
+	if err := json.Unmarshal(content, cpt); err != nil {
+		return nil, fmt.Errorf("readCheckpoint Unmarshal %v -> %w", path, err)
+	}
+	return cpt, nil
+}
+
+// makeCheckpoint gen checkpoint file or read a original one
+// and also responsiable cpts in LogCollector
+// TODO: put reader queue into checkpoint
+func makeCheckpoint(path string, meta *FileMeta, offset uint64) error {
+	file, err := os.Create(path) // create a new one or truncate file
+	cpt := &kCheckpoint{*meta, uint64(offset), meta.fd.Name()}
+	if err != nil {
+		return fmt.Errorf("makeCheckpoint create or open checkpoint file %v -> %w", path, err)
+	}
+	defer file.Close()
+	content, err := json.Marshal(cpt)
+	if err != nil {
+		return fmt.Errorf("makeCheckpoint Marshal -> %w", err)
+	}
+	// create a new file
+	if err := os.WriteFile(path, content, os.ModeAppend); err != nil {
+		return fmt.Errorf("makeCheckpoint write cpt file %v -> %w", path, err)
+	}
+	// log.Println("makeCheckpoint success, path %v, file %v",path, meta.fd.Name())
+	return nil
 }

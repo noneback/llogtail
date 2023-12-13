@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log"
 	"os"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,7 +19,7 @@ type Event struct {
 	meta *LogMeta
 }
 
-func(e Event) String() string {
+func (e Event) String() string {
 	return fmt.Sprintf("[ %v, %v, %v ] ", e.e, e.meta.path, e.meta.fMeta.Inode)
 }
 
@@ -77,18 +77,19 @@ type FileMeta struct {
 // Step 2, Watcher Events. Event is passed to LogWatcher via a chan. LogWatcher will transform raw event into LogFileEvent based on some pattern(linux only at now) or File's status. Specially, when file is removed, we consider it a mistake and put path into poller quere so that it will be rewatcher when poller triggers.
 // Step 3: Send Event.
 type LogWatcher struct {
-	pathMap        map[uint32]string   // id -> file path
-	logMetas       map[string]*LogMeta // file path -> LogMeta？ registerd log file meta
-	watcher        *fsnotify.Watcher
-	EventC         chan *Event
-	nextID         uint32
-	closeC         chan struct{}
-	pollerCloseC   chan struct{}
+	pathMap      map[uint32]string   // id -> file path
+	logMetas     map[string]*LogMeta // file path -> LogMeta？ registerd log file meta
+	watcher      *fsnotify.Watcher
+	EventC       chan *Event
+	nextID       uint32
+	closeC       chan struct{}
+	pollerCloseC chan struct{}
 	// windows        map[string]uint64       // filepath -> window  two fsnotify op, new op in low bits, file path -> window
 	eventFilter    map[string]LogFileEvent // filepath -> event, fifo
 	lastSentTs     time.Time
 	filterInterval time.Duration
 	pollerInterval time.Duration
+	renameLock sync.Mutex
 }
 
 type LogWatchOption struct {
@@ -98,10 +99,10 @@ type LogWatchOption struct {
 
 func NewLogWatcher(option *LogWatchOption) *LogWatcher {
 	return &LogWatcher{
-		nextID:         0,
-		pathMap:        make(map[uint32]string),
-		EventC:         make(chan *Event),
-		logMetas:       make(map[string]*LogMeta), // path -> LogMeta
+		nextID:   0,
+		pathMap:  make(map[uint32]string),
+		EventC:   make(chan *Event),
+		logMetas: make(map[string]*LogMeta), // path -> LogMeta
 		// windows:        map[string]uint64{},
 		closeC:         nil,
 		pollerCloseC:   nil,
@@ -150,7 +151,7 @@ func (lw *LogWatcher) eventHandler() {
 			}
 			logger.Debugf("LogWatcher watcher.Events %v\n", e)
 			if err := lw.handleEvent(e.Name, eventTransform(e.Op)); err != nil {
-				logger.Errorf("eventHandler handle event, err %v\n", err.Error())
+				logger.Errorf("eventHandler handle event -> %v\n", err)
 			}
 		case err, ok := <-lw.watcher.Errors:
 			if !ok {
@@ -180,13 +181,12 @@ func (lw *LogWatcher) poller() {
 			logger.Debug("poll_ticker trigger")
 			// poller based on pattern
 			// path from meta
-
 			for _, meta := range lw.logMetas {
 				if err := lw.handleRenameRotate(meta); err != nil { // action as it is a rename opt
-					logger.Error("[poller] handle poller task failed", err)
+					logger.Warning("[poller] handle poller task failed", err)
 					continue
 				} // handle it as a rename event
-				logger.Infof("[poller] handle poll_ticker task success, file %v",  meta.path)
+				logger.Infof("[poller] handle poll_ticker task success, file %v", meta.path)
 			}
 
 		case <-lw.pollerCloseC:
@@ -211,6 +211,9 @@ func (lw *LogWatcher) handleRemoved(meta *LogMeta) error {
 // 2. update log meta
 // 3. send evnet to upper layer
 func (lw *LogWatcher) handleRenameRotate(meta *LogMeta) error {
+	lw.renameLock.Lock()
+	defer lw.renameLock.Unlock()
+
 	var (
 		fInfo fs.FileInfo
 		err   error
@@ -220,7 +223,7 @@ func (lw *LogWatcher) handleRenameRotate(meta *LogMeta) error {
 		fInfo, err = findFileByPath(meta.path)
 		return err
 	}); err != nil {
-		// TODO(link.xk): if a rename create file is too slow(lower than 0.1s, not common), do we need to resolve it ?
+		// TODO(noneback): if a rename create file is too slow(lower than 0.1s, not common), do we need to resolve it ?
 		return fmt.Errorf("[handleRenameRotate] handle rename rotate failed, relocate log file dir %v, pattern %v -> %w", meta.Dir, meta.Pattern, err)
 	}
 
@@ -240,7 +243,7 @@ func (lw *LogWatcher) handleRenameRotate(meta *LogMeta) error {
 	if err := lw.watcher.Add(meta.path); err != nil {
 		return fmt.Errorf("[handleRenameRotate] handle rename rotate failed, watch new logfile %s -> %w", meta.path, err)
 	}
-	log.Printf("watcher: %v rotate\n", meta.path)
+	logger.Noticef("watcher: %v rotate\n", meta.path)
 	lw.sendEvent(LogFileRenameRotate, meta)
 	return nil
 }
@@ -272,9 +275,7 @@ func (lw *LogWatcher) handleEvent(path string, e LogFileEvent) error {
 	}
 	switch e {
 	case LogFileRenameRotate:
-		// log.Info("[handleEvent] detect rename rorate", log.String("file", meta.path))
 		if err := lw.handleRenameRotate(meta); err != nil {
-			// log.Error("Log Rename handle failed, put into poller")
 			return fmt.Errorf("[handleEvent] LogFileRenameRotate -> %w", err)
 		}
 	case LogFileRemove:
@@ -286,14 +287,13 @@ func (lw *LogWatcher) handleEvent(path string, e LogFileEvent) error {
 	case LogFileChomd:
 		// we consider chmod a remove event
 		if _, err := os.Stat(meta.path); errors.Is(err, fs.ErrNotExist) {
-			// log.Debug("LogFileChmod Found")
 			if err := lw.handleRemoved(meta); err != nil {
 				return fmt.Errorf("[handleEvent] LogFileRemove -> %w", err)
 			}
 		}
 
 	case LogFileEventNotEncoded:
-		// log.Info("LogFileEventNotEncoded", log.String("event", e.String()))
+		logger.Errorf("LogFileEventNotEncoded: %v", e)
 		lw.sendEvent(LogFileEventNotEncoded, meta)
 	}
 	return nil
@@ -317,7 +317,6 @@ func (lw *LogWatcher) genLogMeta(logFile fs.FileInfo, path, dir, pattern string)
 		return nil, fmt.Errorf("[genLogMeta] read file to gen sign failed -> %w", err)
 	}
 
-	// log.Info("gen Log File Meta", log.String("file", path))
 	return &LogMeta{
 		Dir:     dir,
 		Pattern: pattern,
@@ -352,9 +351,7 @@ func (lw *LogWatcher) RegisterAndWatch(dir, pattern string) error {
 			return fmt.Errorf("[RegisterAndWatch] gen log meta failed, dir %v, pattern %v, path %v, err -> %w", dir, pattern, path, err)
 		}
 
-		// log.Info("Register Log File", log.String("file", path))
 		lw.logMetas[path] = meta
-		// lw.windows[path] = uint64(0) // for event handling
 		if err = lw.watcher.Add(path); err != nil {
 			return fmt.Errorf("[RegisterAndWatch] Add file %v to watcher failed -> %w", logFile.Name(), err)
 		}

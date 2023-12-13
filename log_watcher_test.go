@@ -13,6 +13,12 @@ import (
 
 var kWatcherCloseC chan struct{}
 
+const kPoller = 3 * time.Second
+
+var kLogs = []string{
+	"tests/error.log", "tests/info.log", "tests/warn.log",
+}
+
 type kSimEvent struct {
 	path string
 	// inode int
@@ -77,7 +83,15 @@ func (er *EventReceiver) Stop() {
 
 func Pre() {
 	InitLogger(&defauleLogOption)
-	shell := `rm -rf tests && mkdir -p tests && cd tests && touch error.log warn.log info.log`
+	shell := `rm -rf tests offset && mkdir -p tests offset && cd tests && touch error.log warn.log info.log collector.json && echo "{
+		"dir": "/var/log/myapp",
+		"pattern": "*.log",
+		"lineSeperator": "\n",
+		"sink": {
+			"type": "file",
+			"config": "tests/config.json"
+		}
+	}" > collector.json`
 	_, err := exec.Command("sh", "-c", shell).Output()
 	if err != nil {
 		panic("Pre -> " + err.Error())
@@ -93,7 +107,7 @@ func TestLogWatcher(t *testing.T) {
 	watcher := NewLogWatcher(
 		&LogWatchOption{
 			FilterInterval: time.Microsecond * 300,
-			PollerInterval: time.Second * 3,
+			PollerInterval: kPoller,
 		},
 	)
 
@@ -129,11 +143,9 @@ func TestLogWatcher(t *testing.T) {
 			t.FailNow()
 		}
 	})
-	logs := []string{
-		"tests/error.log", "tests/info.log", "tests/warn.log",
-	}
+
 	t.Run("Test Watch Modify Event", func(t *testing.T) {
-		for _, logf := range logs {
+		for _, logf := range kLogs {
 			modify(logf, kDataOneKB)
 		}
 		time.Sleep(time.Millisecond * 100)
@@ -152,7 +164,7 @@ func TestLogWatcher(t *testing.T) {
 	})
 
 	t.Run("Test Watch Rename Rorate Event", func(t *testing.T) {
-		for _, logf := range logs {
+		for _, logf := range kLogs {
 			// modify(logf,kDataOneKB)
 			rotate(logf)
 		}
@@ -172,7 +184,7 @@ func TestLogWatcher(t *testing.T) {
 	})
 
 	t.Run("Test Watch Modify After Rename Rorate Event", func(t *testing.T) {
-		for _, logf := range logs {
+		for _, logf := range kLogs {
 			modify(logf, kDataOneKB)
 		}
 		time.Sleep(time.Millisecond * 100)
@@ -191,7 +203,7 @@ func TestLogWatcher(t *testing.T) {
 	})
 
 	t.Run("Test Watch Remove Event", func(t *testing.T) {
-		for _, logf := range logs {
+		for _, logf := range kLogs {
 			remove(logf)
 		}
 		time.Sleep(time.Millisecond * 100)
@@ -209,10 +221,10 @@ func TestLogWatcher(t *testing.T) {
 		}
 	})
 
-	t.Run("Test Watcher Poller", func(t *testing.T){
+	t.Run("Test Watcher Poller", func(t *testing.T) {
 		Pre()
 		logger.Notice("Sleep for Poller")
-		time.Sleep(4 * time.Second)
+		time.Sleep(kPoller + time.Second)
 
 		if err := receiver.Match([]kSimEvent{
 			{
@@ -283,5 +295,3 @@ func rotate(logPath string) error {
 	newFile.Close()
 	return nil
 }
-
-
