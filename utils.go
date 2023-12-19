@@ -23,15 +23,14 @@ import (
 )
 
 var logger *logging.Logger
-var defauleLogOption = LogOption  {
+var defauleLogOption = LogOption{
 	Verbose: true,
-	Level: logging.DEBUG,
+	Level:   logging.DEBUG,
 }
 
 func init() {
 	// InitLogger(&defauleLogOption)
 }
-
 
 func genFileSign(file *os.File) (*[16]byte, error) {
 	sign := make([]byte, SignContentSize)
@@ -112,13 +111,13 @@ func detectNewFile(path string, fInfo os.FileInfo, old *LogMeta) (*FileMeta, err
 }
 
 func eventTransform(opkind fsnotify.Op) LogFileEvent {
-	transformer := map[fsnotify.Op] LogFileEvent {
-		fsnotify.Rename:LogFileRenameRotate,
-		fsnotify.Remove:LogFileRemove,
-		fsnotify.Write:LogFileModify,
-		fsnotify.Chmod:LogFileChomd,
+	transformer := map[fsnotify.Op]LogFileEvent{
+		fsnotify.Rename: LogFileRenameRotate,
+		fsnotify.Remove: LogFileRemove,
+		fsnotify.Write:  LogFileModify,
+		fsnotify.Chmod:  LogFileChomd,
 	}
-	if t, ok := transformer[opkind];ok {
+	if t, ok := transformer[opkind]; ok {
 		return t
 	}
 
@@ -139,7 +138,6 @@ func validateCpt(cpt *kCheckpoint, meta *LogMeta) bool {
 	}
 	return false
 }
-
 
 // WalkDirs walks dir with depth, and filter matched dir
 // filter,p is dir or file name
@@ -181,11 +179,10 @@ func WalkDirs(dir string, depth int, filter func(p string) bool, hook func(fs fs
 	return matchedDirs, nil
 }
 
-
 func ExectionTimeCost(title string, start time.Time) {
-		msg := fmt.Sprintf("[%v] time cost: %v", title, time.Since(start))
-		log.Println("[ExectionTimeCost] ",  msg)
-	
+	msg := fmt.Sprintf("[%v] time cost: %v", title, time.Since(start))
+	log.Println("[ExectionTimeCost] ", msg)
+
 }
 
 func Retry(times int, interval time.Duration, method func() error) error {
@@ -202,24 +199,23 @@ func Retry(times int, interval time.Duration, method func() error) error {
 	return nil
 }
 
-
 type LogOption struct {
 	Verbose bool
-	Level logging.Level
+	Level   logging.Level
 }
 
 func InitLogger(opt *LogOption) {
 	if !opt.Verbose {
-		return;
+		return
 	}
-	
+
 	var once sync.Once
 	once.Do(
 		func() {
 			logging.SetFormatter(logging.MustStringFormatter(
 				`%{time:2006-01-02 15:04:05} %{color}%{shortfunc} ▶ %{level:.8s} %{message}%{color:reset}`,
 			))
-			logging.SetLevel(opt.Level,"")
+			logging.SetLevel(opt.Level, "")
 			logger = logging.MustGetLogger("llogtail")
 		},
 	)

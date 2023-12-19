@@ -8,6 +8,7 @@ import (
 	"github.com/eapache/queue"
 )
 
+// single file collector handle
 type kCollector struct {
 	fpath    string        // file path
 	task     *kTaskContext // current collect task
@@ -60,10 +61,9 @@ func (c *kCollector) init() error {
 func (c *kCollector) push(meta *LogMeta) {
 	c.waitting.Add(meta)
 }
-func (c *kCollector) stop()             {}
+func (c *kCollector) stop() {}
 
 func (c *kCollector) join() {}
-
 
 func (c *kCollector) contain(meta *LogMeta) bool {
 	// is file in readerQ

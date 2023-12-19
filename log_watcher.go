@@ -89,7 +89,7 @@ type LogWatcher struct {
 	lastSentTs     time.Time
 	filterInterval time.Duration
 	pollerInterval time.Duration
-	renameLock sync.Mutex
+	renameLock     sync.Mutex
 }
 
 type LogWatchOption struct {
@@ -299,7 +299,7 @@ func (lw *LogWatcher) handleEvent(path string, e LogFileEvent) error {
 	return nil
 }
 
-func (lw *LogWatcher) genLogMeta(logFile fs.FileInfo, path, dir, pattern string) (*LogMeta, error) {
+func genLogMeta(logFile fs.FileInfo, path, dir, pattern string) (*LogMeta, error) {
 	var (
 		fd  *os.File
 		err error
@@ -346,7 +346,7 @@ func (lw *LogWatcher) RegisterAndWatch(dir, pattern string) error {
 		logFile := logFiles[i]
 		path := pathList[i]
 
-		meta, err := lw.genLogMeta(logFile, path, dir, pattern)
+		meta, err := genLogMeta(logFile, path, dir, pattern)
 		if err != nil {
 			return fmt.Errorf("[RegisterAndWatch] gen log meta failed, dir %v, pattern %v, path %v, err -> %w", dir, pattern, path, err)
 		}

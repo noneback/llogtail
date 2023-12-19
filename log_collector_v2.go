@@ -164,7 +164,6 @@ func (lc *LogCollector) handleEvent(event *Event) error {
 	return nil
 }
 
-
 // TODO(link.xk): make sure all resource has been released
 func (lc *LogCollector) Close() error {
 	log.Println("LogCollector begin Close")

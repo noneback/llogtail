@@ -17,20 +17,18 @@ type FileSink struct {
 	dst string
 }
 
-
 func NewFileSink() Sink {
-	return &FileSink{
-	}
+	return &FileSink{}
 }
 
-func (s *FileSink) Open(conf string)error {
+func (s *FileSink) Open(conf string) error {
 	return nil
 }
 
-func (s *FileSink) Push(content []byte) error{
+func (s *FileSink) Push(content []byte) error {
 	return nil
 }
 
-func (s *FileSink) Close()error{
+func (s *FileSink) Close() error {
 	return nil
 }
