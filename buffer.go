@@ -3,7 +3,6 @@ package llogtail
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -34,10 +33,6 @@ const (
 	MaxBufferSize        = 4 * MB
 	MB                   = 1024 * 1024
 	KB                   = 1024
-)
-
-var (
-	ErrNoProgress = errors.New("Buffer Read From Line, No Prgress")
 )
 
 // BlockingBuffer is a thread-safe buffer, with blocking api.
@@ -113,7 +108,7 @@ func (b *BlockingBuffer) ReadLinesFrom(reader *os.File, lineSep string) (int, er
 		b.enlarge()
 	}
 	if n == 0 {
-		log.Printf("[buffer] ReadLine Maybe no progress\n")
+		logger.Noticef("[buffer] ReadLine Maybe no progress\n")
 		return 0, ErrNoProgress // make it an eof to trigger
 	}
 	return n, nil

@@ -158,8 +158,27 @@ func (lc *LogCollector) handleEvent(event *Event) error {
 		// Removed Event trigger when file is removed.
 		logger.Noticef("Remove LogFile %v\n", event.meta.path)
 		// TODO: delete collector
+
+	case LogFileEventNotEncoded:
+		logger.Errorf("Not Support Log Event %v", event.meta.path)
+
 	case LogFileModify:
-		// log.Printf("Modify LogFile %v\n", event.meta.path)
+		c, ok := lc.collectors[event.meta.path]
+		if !ok {
+			logger.Errorf("Modify LogFile %v, but no collector\n", event.meta.path)
+			break
+		}
+
+		content, err := c.fetch()
+		if err != nil {
+			logger.Errorf("collect file %v -> %v", event.meta.path, err)
+			break
+		}
+		if len(content) != 0 {
+			if err := lc.sink.Push(content); err != nil {
+				logger.Errorf("sink data for %v -> %v", event.meta.path, err)
+			}
+		}
 	}
 	return nil
 }
@@ -168,5 +187,8 @@ func (lc *LogCollector) handleEvent(event *Event) error {
 func (lc *LogCollector) Close() error {
 	log.Println("LogCollector begin Close")
 	defer log.Println("LogCollector finish Close")
+	for _, kc := range lc.collectors {
+		kc.stop() // TODO(noneback): need check
+	}
 	return nil
 }

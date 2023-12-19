@@ -3,10 +3,17 @@ package llogtail
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/eapache/queue"
 )
+
+var (
+	ErrNoProgress = errors.New("Buffer Read From Line, No Prgress")
+)
+
+const kDefaultLineSep = "\n"
 
 // single file collector handle
 type kCollector struct {
@@ -15,13 +22,12 @@ type kCollector struct {
 	waitting *queue.Queue  // wait to be collect, *LogReader
 	buf      *BlockingBuffer
 	cpt      *kCheckpoint
+	joining  bool
 }
 
 type kTaskContext struct {
 	offset uint64
 	meta   *LogMeta // Note: it is a snapshot, rather than a real-time status
-	// delete bool     // if task is deleted
-	// isSet  bool     // if offset is setted
 }
 
 func newCollector(meta *LogMeta) *kCollector {
@@ -33,7 +39,8 @@ func newCollector(meta *LogMeta) *kCollector {
 			offset: 0,
 			meta:   meta,
 		},
-		cpt: nil,
+		cpt:     nil,
+		joining: false,
 	}
 }
 
@@ -58,12 +65,80 @@ func (c *kCollector) init() error {
 	return nil
 }
 
-func (c *kCollector) push(meta *LogMeta) {
-	c.waitting.Add(meta)
-}
-func (c *kCollector) stop() {}
+func (c *kCollector) fetch() ([]byte, error) {
+	logger.Debugf("IfFullThenWait start %v", c.fpath)
+	c.buf.IfFullThenWait() // TODO(noneback): check
+	logger.Debugf("IfFullThenWait end %v", c.fpath)
 
-func (c *kCollector) join() {}
+	fd := c.task.meta.fMeta.fd
+	n, err := c.buf.ReadLinesFrom(fd, kDefaultLineSep)
+	if err != nil {
+		if !errors.Is(err, io.EOF) && errors.Is(err, ErrNoProgress) {
+			return nil, fmt.Errorf("read closed file to buffer -> %w", err)
+		}
+		// EOF
+		if c.waitting.Length() != 0 {
+			c.roll()
+			return nil, nil
+		}
+	}
+	// no err, collect file success
+	if n != 0 && c.task.offset <= SignContentSize {
+		// if file size if less than  SignContentSize, we need to gen sign until it fill it.
+		if _, err := fd.Seek(int64(0), io.SeekStart); err != nil {
+			return nil, fmt.Errorf("file seek 0 to gen hash -> %w", err)
+		}
+		hash, err := genFileSign(fd)
+		if err != nil {
+			return nil, fmt.Errorf("genFileSign -> %w", err)
+		}
+		c.cpt.Meta.Hash = *hash
+		c.task.meta.fMeta.Hash = *hash
+		if _, err := fd.Seek(int64(c.task.offset)+int64(n), io.SeekStart); err != nil {
+			return nil, fmt.Errorf("file seek %v to resume after gen sign -> %w", c.task.offset+uint64(n), err)
+		}
+	}
+
+	c.task.offset += uint64(n)
+	c.cpt.Offset += uint64(n)
+	//  TODO(noneback): check
+	return c.buf.Fetch(), nil
+}
+
+func (c *kCollector) push(meta *LogMeta) {
+	if !c.joining && !c.contain(meta) {
+		c.waitting.Add(meta)
+	}
+}
+
+func (c *kCollector) stop() {
+	if c.task.meta.fMeta.fd != nil {
+		c.task.meta.fMeta.fd.Close()
+	}
+
+	for c.waitting.Length() != 0 {
+		fd := c.waitting.Remove().(*LogMeta).fMeta.fd
+		if fd != nil {
+			fd.Close()
+		}
+	}
+
+	c.buf.cond.Broadcast()
+	c.buf.Close()
+	c.buf = nil
+}
+
+func (c *kCollector) roll() {
+	meta := c.waitting.Remove().(*LogMeta)
+	c.task.meta = meta
+	c.task.offset = 0
+	c.cpt.Meta = *meta.fMeta
+	c.cpt.Offset = 0
+}
+
+func (c *kCollector) join() {
+	c.joining = true
+}
 
 func (c *kCollector) contain(meta *LogMeta) bool {
 	// is file in readerQ
@@ -79,4 +154,8 @@ func (c *kCollector) contain(meta *LogMeta) bool {
 	}
 
 	return false
+}
+
+func (c *kCollector) sink() error {
+	return nil
 }
