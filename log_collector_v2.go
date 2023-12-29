@@ -1,9 +1,10 @@
 package llogtail
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 
-	"log"
 	"time"
 )
 
@@ -57,6 +58,18 @@ type LogWatcherOption struct {
 	PollerInterval int `json:"poller"` // in byte
 }
 
+func ReadLogCollectorConf(path string) (*LogConf, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("open %v -> %w", path, err)
+	}
+	var conf LogConf
+	if err := json.Unmarshal(content, &conf); err != nil {
+		return nil, fmt.Errorf("unmarshal -> %w", err)
+	}
+	return &conf, nil
+}
+
 // TODO(link.xk): add some option: filter interval, buffer size
 func NewLogCollector() *LogCollector {
 	return &LogCollector{
@@ -82,6 +95,10 @@ func (lc *LogCollector) Init(conf LogConf) error {
 	}
 
 	// init
+	if err := lc.sink.Open(conf.Sink.Conf); err != nil {
+		return fmt.Errorf("[LogCollector] Open sink -> %w", err)
+	}
+
 	if err := lc.watcher.Init(); err != nil {
 		return fmt.Errorf("[LogCollector] watcher init -> %w", err)
 	}
@@ -113,7 +130,7 @@ func (lc *LogCollector) listenEvent() {
 		select {
 		case e := <-lc.watcher.EventC:
 			if err := lc.handleEvent(e); err != nil {
-				log.Printf("[LogCollector] listenEvent, err %v", err.Error())
+				logger.Errorf("[LogCollector] listenEvent, err %v", err.Error())
 			}
 		case <-ticker.C:
 			// avoid log collect no progress lockdown to long
@@ -129,19 +146,15 @@ func (lc *LogCollector) listenEvent() {
 
 func (lc *LogCollector) handleEvent(event *Event) error {
 	path := event.meta.path
-
 	switch event.e {
 	case LogFileDiscover:
-		// discover only trigger by RegisterAndWatch func.
-		// LogFileDiscover means that file is register first time during collector's lifetime. LogFile could be new found or an original one.
-		// For new log, we create a new cpt file and put msg to task queue. For a existed log, we read cpt file and validate metadata before put into queue.
-		logger.Noticef("DiscoverFile %v, inode %v", event.meta.fMeta.Inode, event.meta.fMeta.fd.Name())
-
+		// Triggered when log file firstly decovered
+		// Start a new collector and fire it
+		logger.Debugf("DiscoverFile %v, inode %v", event.meta.fMeta.fd.Name(), event.meta.fMeta.Inode)
 		handle := newCollector(event.meta)
 		if err := handle.init(); err != nil {
 			return fmt.Errorf("collect init -> %w", err)
 		}
-		// TODO: fire it
 		lc.collectors[path] = handle
 	case LogFileRenameRotate:
 		// Rotate Trigger by LogWatcher when log rorates.
@@ -152,17 +165,18 @@ func (lc *LogCollector) handleEvent(event *Event) error {
 			logger.Noticef("RenameRotate: add a reader, inode %v, filepath %v\n", event.meta.fMeta.Inode, event.meta.path)
 			c.push(event.meta)
 		} else {
-			logger.Infof("Rename event come, but already in readerQ or tasks, file path %v\n", event.meta.path)
+			logger.Noticef("Rename event come, but already in readerQ or tasks, file path %v\n", event.meta.path)
 		}
 	case LogFileRemove:
 		// Removed Event trigger when file is removed.
 		logger.Noticef("Remove LogFile %v\n", event.meta.path)
-		// TODO: delete collector
+		// DO NOTHING
 
 	case LogFileEventNotEncoded:
 		logger.Errorf("Not Support Log Event %v", event.meta.path)
 
 	case LogFileModify:
+		logger.Noticef("Modify LogFile %v\n", event.meta.path)
 		c, ok := lc.collectors[event.meta.path]
 		if !ok {
 			logger.Errorf("Modify LogFile %v, but no collector\n", event.meta.path)
@@ -174,19 +188,27 @@ func (lc *LogCollector) handleEvent(event *Event) error {
 			logger.Errorf("collect file %v -> %v", event.meta.path, err)
 			break
 		}
+
 		if len(content) != 0 {
-			if err := lc.sink.Push(content); err != nil {
+			if err := lc.sink.Push(event.meta.path, content); err != nil {
 				logger.Errorf("sink data for %v -> %v", event.meta.path, err)
 			}
+		} else {
+			logger.Warningf("sink: content is empty")
 		}
 	}
 	return nil
 }
 
+func (lc *LogCollector) Join() {
+	// TODO(noneback)L: join for data collection
+}
+
 // TODO(link.xk): make sure all resource has been released
 func (lc *LogCollector) Close() error {
-	log.Println("LogCollector begin Close")
-	defer log.Println("LogCollector finish Close")
+	lc.sink.Close()
+	logger.Notice("LogCollector begin Close")
+	defer logger.Notice("LogCollector finish Close")
 	for _, kc := range lc.collectors {
 		kc.stop() // TODO(noneback): need check
 	}

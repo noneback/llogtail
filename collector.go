@@ -59,17 +59,17 @@ func (c *kCollector) init() error {
 	}
 
 	// if validate is not pass, or cpt file not exists, create new one
-	if err := makeCheckpoint(cptPath, c.task.meta.fMeta, 0); err != nil {
+	c.cpt, err = makeCheckpoint(cptPath, c.task.meta.fMeta, 0)
+	if err != nil {
 		return fmt.Errorf("make checkpoint -> %w", err)
 	}
 	return nil
 }
 
 func (c *kCollector) fetch() ([]byte, error) {
-	logger.Debugf("IfFullThenWait start %v", c.fpath)
-	c.buf.IfFullThenWait() // TODO(noneback): check
-	logger.Debugf("IfFullThenWait end %v", c.fpath)
-
+	// logger.Debugf("IfFullThenWait start %v", c.fpath)
+	// c.buf.IfFullThenWait() // TODO(noneback): check
+	// logger.Debugf("IfFullThenWait end %v", c.fpath)
 	fd := c.task.meta.fMeta.fd
 	n, err := c.buf.ReadLinesFrom(fd, kDefaultLineSep)
 	if err != nil {
@@ -152,7 +152,6 @@ func (c *kCollector) contain(meta *LogMeta) bool {
 	if c.task.meta.path == meta.path && c.task.meta.fMeta.Dev == meta.fMeta.Dev && c.task.meta.fMeta.Inode == meta.fMeta.Inode { // TODO: add sign
 		return true
 	}
-
 	return false
 }
 

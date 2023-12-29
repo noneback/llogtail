@@ -83,17 +83,22 @@ func (er *EventReceiver) Stop() {
 
 func Pre() {
 	InitLogger(&defauleLogOption)
-	shell := `rm -rf tests offset && mkdir -p tests offset && cd tests && touch error.log warn.log info.log collector.json && echo "{
-		"dir": "/var/log/myapp",
-		"pattern": "*.log",
-		"lineSeperator": "\n",
-		"sink": {
-			"type": "file",
-			"config": "tests/config.json"
-		}
-	}" > collector.json`
+	shell := `rm -rf tests offset && mkdir -p tests offset && cd tests && touch error.log warn.log info.log collector.json sink.json && echo '{
+	"dir": "./tests",
+	"pattern": "*.log",
+	"lineSeperator": "\\n",
+	"sink": {
+		"type": "file",
+		"config": "tests/sink.json"
+	},
+	"watcher": {
+		"filter": 1,
+		"poller": 3
+	}
+}' > collector.json && echo '{ "dst": "./tests/dst.txt" }' > sink.json`
 	_, err := exec.Command("sh", "-c", shell).Output()
 	if err != nil {
+		logger.Errorf("shell %v", shell)
 		panic("Pre -> " + err.Error())
 	}
 	logger.Notice("Pre Success")
@@ -248,8 +253,9 @@ var kDataOneKB = generateDataOneKB()
 func generateDataOneKB() []byte {
 	rand.NewSource(time.Now().UnixNano())
 	data := make([]byte, 1024) // 1KB = 1024 Bytes
+	ch := byte('a' + rand.Intn(26))
 	for i := range data {
-		data[i] = byte(rand.Intn(256)) // Random byte value between 0-255
+		data[i] = ch // Random byte value between 0-255
 	}
 	return data
 }

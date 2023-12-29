@@ -28,9 +28,8 @@ func TestCollector(t *testing.T) {
 		logger.Errorf("mock log meta -> %v", err)
 		t.FailNow()
 	}
-
+	c := newCollector(meta)
 	t.Run("Test Collector Init", func(t *testing.T) {
-		c := newCollector(meta)
 		if err := c.init(); err != nil {
 			logger.Errorf("init -> %v", err)
 			t.FailNow()
@@ -38,6 +37,12 @@ func TestCollector(t *testing.T) {
 	})
 
 	t.Run("Test Collector Collect", func(t *testing.T) {
+		raw, err := c.fetch()
+		if err != nil {
+			logger.Errorf("fetct -> %v", err.Error())
+			t.FailNow()
+		}
+		logger.Info(raw)
 
 	})
 

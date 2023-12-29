@@ -12,10 +12,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/eapache/queue"
 	"github.com/fsnotify/fsnotify"
@@ -181,8 +183,7 @@ func WalkDirs(dir string, depth int, filter func(p string) bool, hook func(fs fs
 
 func ExectionTimeCost(title string, start time.Time) {
 	msg := fmt.Sprintf("[%v] time cost: %v", title, time.Since(start))
-	log.Println("[ExectionTimeCost] ", msg)
-
+	logger.Notice("[ExectionTimeCost] ", msg)
 }
 
 func Retry(times int, interval time.Duration, method func() error) error {
@@ -213,7 +214,7 @@ func InitLogger(opt *LogOption) {
 	once.Do(
 		func() {
 			logging.SetFormatter(logging.MustStringFormatter(
-				`%{time:2006-01-02 15:04:05} %{color}%{shortfunc} ▶ %{level:.8s} %{message}%{color:reset}`,
+				`%{time:2006-01-02 15:04:05} %{color}%{shortfunc} ▶ %{level:.8s}%{color:reset} %{message}`,
 			))
 			logging.SetLevel(opt.Level, "")
 			logger = logging.MustGetLogger("llogtail")
@@ -238,21 +239,35 @@ func readCheckpoint(path string) (*kCheckpoint, error) {
 // makeCheckpoint gen checkpoint file or read a original one
 // and also responsiable cpts in LogCollector
 // TODO: put reader queue into checkpoint
-func makeCheckpoint(path string, meta *FileMeta, offset uint64) error {
+func makeCheckpoint(path string, meta *FileMeta, offset uint64) (*kCheckpoint, error) {
 	file, err := os.Create(path) // create a new one or truncate file
 	cpt := &kCheckpoint{*meta, uint64(offset), meta.fd.Name()}
 	if err != nil {
-		return fmt.Errorf("makeCheckpoint create or open checkpoint file %v -> %w", path, err)
+		return nil, fmt.Errorf("makeCheckpoint create or open checkpoint file %v -> %w", path, err)
 	}
 	defer file.Close()
 	content, err := json.Marshal(cpt)
 	if err != nil {
-		return fmt.Errorf("makeCheckpoint Marshal -> %w", err)
+		return nil, fmt.Errorf("makeCheckpoint Marshal -> %w", err)
 	}
 	// create a new file
 	if err := os.WriteFile(path, content, os.ModeAppend); err != nil {
-		return fmt.Errorf("makeCheckpoint write cpt file %v -> %w", path, err)
+		return nil, fmt.Errorf("makeCheckpoint write cpt file %v -> %w", path, err)
 	}
 	// log.Println("makeCheckpoint success, path %v, file %v",path, meta.fd.Name())
-	return nil
+	return cpt, nil
+}
+
+func UnsafeSliceToString(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
+}
+
+// zero-copy slice convert to string
+func UnsafeStringToSlice(s string) (b []byte) {
+	p := unsafe.Pointer((*reflect.StringHeader)(unsafe.Pointer(&s)).Data)
+	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+	hdr.Data = uintptr(p)
+	hdr.Cap = len(s)
+	hdr.Len = len(s)
+	return b
 }
