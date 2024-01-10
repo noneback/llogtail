@@ -65,7 +65,7 @@ func TestLogCollector(t *testing.T) {
 
 	t.Run("Test Collector Rename Collector", func(t *testing.T) {
 		expected := make(map[string][]byte)
-		for i := 0; i < 100; i++ {
+		for i := 0; i < 10000; i++ {
 			mock := generateDataOneKB()
 			path := kLogs[i%3]
 			seq := expected[path]

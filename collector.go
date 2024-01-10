@@ -156,8 +156,8 @@ func (c *kCollector) join() {
 func (c *kCollector) contain(meta *LogMeta) bool {
 	// is file in readerQ
 	for i := 0; i < c.waitting.Length(); i++ {
-		lr := c.waitting.Get(i).(*LogReader)
-		if lr.meta.path == meta.path && lr.meta.fMeta.Dev == meta.fMeta.Dev && lr.meta.fMeta.Inode == meta.fMeta.Inode {
+		lm := c.waitting.Get(i).(*LogMeta)
+		if lm.path == meta.path && lm.fMeta.Dev == meta.fMeta.Dev && lm.fMeta.Inode == meta.fMeta.Inode {
 			return true
 		}
 	}

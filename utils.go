@@ -27,7 +27,7 @@ import (
 var logger *logging.Logger
 var defauleLogOption = LogOption{
 	Verbose: true,
-	Level:   logging.DEBUG,
+	Level:   logging.INFO,
 }
 
 func init() {

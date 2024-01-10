@@ -58,6 +58,14 @@ func (er *EventReceiver) Run() {
 	}()
 }
 
+func (er *EventReceiver) Draining() {
+	for _, v := range er.eventQ {
+		for v.Length() != 0 {
+			v.Remove()
+		}
+	}
+}
+
 func (er *EventReceiver) Match(events []kSimEvent) error {
 	for _, kEvent := range events {
 		q, ok := er.eventQ[kEvent.path]
@@ -129,6 +137,7 @@ func TestLogWatcher(t *testing.T) {
 	defer watcher.Close()
 
 	t.Run("Test Watcher RegisterAndWatch", func(t *testing.T) {
+		defer receiver.Draining()
 		if err := watcher.RegisterAndWatch(dir, pattern); err != nil {
 			logger.Errorf("Watcher RegisterAndWatch -> %w", err)
 			t.FailNow()
@@ -150,6 +159,7 @@ func TestLogWatcher(t *testing.T) {
 	})
 
 	t.Run("Test Watch Modify Event", func(t *testing.T) {
+		defer receiver.Draining()
 		for _, logf := range kLogs {
 			modify(logf, kDataOneKB)
 		}
@@ -169,6 +179,7 @@ func TestLogWatcher(t *testing.T) {
 	})
 
 	t.Run("Test Watch Rename Rorate Event", func(t *testing.T) {
+		defer receiver.Draining()
 		for _, logf := range kLogs {
 			// modify(logf,kDataOneKB)
 			rotate(logf)
@@ -189,6 +200,7 @@ func TestLogWatcher(t *testing.T) {
 	})
 
 	t.Run("Test Watch Modify After Rename Rorate Event", func(t *testing.T) {
+		defer receiver.Draining()
 		for _, logf := range kLogs {
 			modify(logf, kDataOneKB)
 		}
@@ -208,6 +220,7 @@ func TestLogWatcher(t *testing.T) {
 	})
 
 	t.Run("Test Watch Remove Event", func(t *testing.T) {
+		defer receiver.Draining()
 		for _, logf := range kLogs {
 			remove(logf)
 		}
@@ -227,6 +240,7 @@ func TestLogWatcher(t *testing.T) {
 	})
 
 	t.Run("Test Watcher Poller", func(t *testing.T) {
+		defer receiver.Draining()
 		Pre()
 		logger.Notice("Sleep for Poller")
 		time.Sleep(kPoller + time.Second)
