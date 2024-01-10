@@ -252,11 +252,12 @@ var kDataOneKB = generateDataOneKB()
 // generateDataOneKB generates 1KB of random data
 func generateDataOneKB() []byte {
 	rand.NewSource(time.Now().UnixNano())
-	data := make([]byte, 1024) // 1KB = 1024 Bytes
+	data := make([]byte, 1023) // 1KB = 1024 Bytes
 	ch := byte('a' + rand.Intn(26))
 	for i := range data {
 		data[i] = ch // Random byte value between 0-255
 	}
+	data = append(data, '\n')
 	return data
 }
 
@@ -264,6 +265,22 @@ func generateDataOneKB() []byte {
 func modify(path string, newData []byte) {
 	if err := os.WriteFile(path, newData, 0644); err != nil {
 		logger.Errorf("modify %v", path)
+		panic(err)
+	}
+}
+func appendf(path string, newData []byte) {
+	// Open the file in append mode (os.O_APPEND) and write-only mode (os.O_WRONLY)
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		logger.Error("Error:", err)
+		panic(err)
+	}
+	defer file.Close()
+
+	// Write the new data to the file
+	_, err = file.Write(newData)
+	if err != nil {
+		logger.Error("Error:", err)
 		panic(err)
 	}
 }

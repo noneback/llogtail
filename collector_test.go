@@ -16,7 +16,7 @@ func mockLogMeta() (*LogMeta, error) {
 
 	meta, err := genLogMeta(info, fpath, dir, pattern)
 	if err != nil {
-		fmt.Errorf("mock log meta -> %v", err)
+		return nil, fmt.Errorf("mock log meta -> %v", err)
 	}
 	return meta, nil
 }
@@ -43,7 +43,6 @@ func TestCollector(t *testing.T) {
 			t.FailNow()
 		}
 		logger.Info(raw)
-
 	})
 
 }

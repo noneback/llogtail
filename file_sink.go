@@ -57,6 +57,8 @@ func (s *FileSink) Open(path string) error {
 
 func (s *FileSink) Push(fpath string, content []byte) error {
 	defer ExectionTimeCost(fmt.Sprintf("Pust -> %v", s.dst), time.Now())
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 
 	logger.Infof("file sink: %v", UnsafeSliceToString(content[:10]))
 
@@ -67,8 +69,7 @@ func (s *FileSink) Push(fpath string, content []byte) error {
 	if err != nil {
 		return fmt.Errorf("masrshal data unit -> %w", err)
 	}
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+
 	n, err := s.fd.Write(append(content, []byte("\n")...))
 	if err != nil {
 		return fmt.Errorf("write %v -> %w", s.dst, err)

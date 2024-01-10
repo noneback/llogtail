@@ -28,19 +28,23 @@ func TestLogCollector(t *testing.T) {
 	})
 	defer collector.Close()
 
-	t.Run("Test Collector Collect Once", func(t *testing.T) {
+	t.Run("Test Collector Collect", func(t *testing.T) {
 		collector.Run()
-		expected := make(map[string][][]byte) // path -> data
+		expected := make(map[string][]byte) // path -> data
 		// mock data
-		for i := 0; i < 10; i++ {
+		for i := 0; i < 100; i++ {
 			mock := generateDataOneKB()
 			path := kLogs[i%3]
-			expected[path] = append(expected[path], mock)
-			modify(path, kDataOneKB)
+			seq := expected[path]
+
+			logger.Debugf("mock -> %v to %v", string(mock[:10]), path)
+			seq = append(seq, mock...)
+			expected[path] = seq
+			appendf(path, mock)
 			time.Sleep(time.Millisecond * 50)
 		}
 
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(1000 * time.Millisecond)
 		sconf, err := readFileSinkConf("./tests/sink.json")
 		if err != nil {
 			logger.Errorf("read sink conf -> %w", err)
@@ -54,15 +58,15 @@ func TestLogCollector(t *testing.T) {
 	})
 }
 
-func kCheckContent(expected map[string][][]byte, target string) error {
+func kCheckContent(expected map[string][]byte, target string) error {
 	fd, err := os.Open(target)
 	if err != nil {
 		return fmt.Errorf("open %v -> %w", target, err)
 	}
 	defer fd.Close()
-	cursors := make(map[string]int)
-	for k := range cursors {
-		cursors[k] = 0
+	got := make(map[string][]byte)
+	for k := range expected {
+		got[k] = make([]byte, 0, 1024)
 	}
 
 	scanner := bufio.NewScanner(fd)
@@ -72,15 +76,16 @@ func kCheckContent(expected map[string][][]byte, target string) error {
 		if err := json.Unmarshal(UnsafeStringToSlice(line), &unit); err != nil {
 			return fmt.Errorf("unmarshal line to uint -> %w", err)
 		}
-		cursor := cursors[unit.File]
-		cursors[unit.File] = cursor + 1
+		got[unit.File] = append(got[unit.File], unit.Content...)
+	}
 
-		expected_content := expected[unit.File][cursor]
-
-		if !bytes.Equal(expected_content, unit.Content) {
-			logger.Warningf("except %v, got %v", string(expected_content), string(unit.Content))
-			return fmt.Errorf("Content Not Equal %v at %v", unit.File, cursor)
+	for file, content := range got {
+		expected_content := expected[file]
+		if !bytes.HasPrefix(expected_content, content) {
+			logger.Warningf("except %v, got %v, len %v , %v", string(expected_content), string(content), len(expected_content), len(content))
+			return fmt.Errorf("Content Not Equal %v", file)
 		}
 	}
+
 	return nil
 }

@@ -109,6 +109,7 @@ func (b *BlockingBuffer) ReadLinesFrom(reader *os.File, lineSep string) (int, er
 	}
 	if n == 0 {
 		logger.Noticef("[buffer] ReadLine Maybe no progress\n")
+		logger.Warningf("[buffer] No Progress %v, lineSepIdx  %v", string(b.data[b.offset:actualOffset]), idx)
 		return 0, ErrNoProgress // make it an eof to trigger
 	}
 	return n, nil
