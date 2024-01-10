@@ -67,10 +67,12 @@ func (c *kCollector) init() error {
 }
 
 func (c *kCollector) fetch() ([]byte, error) {
-	// logger.Debugf("IfFullThenWait start %v", c.fpath)
-	// c.buf.IfFullThenWait() // TODO(noneback): check
-	// logger.Debugf("IfFullThenWait end %v", c.fpath)
 	fd := c.task.meta.fMeta.fd
+	// set offset
+	if _, err := fd.Seek(int64(c.cpt.Offset), io.SeekStart); err != nil {
+		return nil, fmt.Errorf("%v seek offset  -> %w", fd.Name(), err)
+	}
+
 	n, err := c.buf.ReadLinesFrom(fd, kDefaultLineSep)
 	if err != nil {
 		if !errors.Is(err, io.EOF) && errors.Is(err, ErrNoProgress) {
@@ -79,6 +81,7 @@ func (c *kCollector) fetch() ([]byte, error) {
 		// EOF
 		if c.waitting.Length() != 0 {
 			c.roll()
+			logger.Noticef("kCollector roll")
 			return nil, nil
 		}
 	}
@@ -103,6 +106,15 @@ func (c *kCollector) fetch() ([]byte, error) {
 	c.cpt.Offset += uint64(n)
 	//  TODO(noneback): check
 	return c.buf.Fetch(), nil
+}
+
+func (c *kCollector) checkpoint() (err error) {
+	cptPath := genCptPath(c.fpath)
+	_, err = makeCheckpoint(cptPath, c.task.meta.fMeta, c.cpt.Offset)
+	if err != nil {
+		return fmt.Errorf("make checkpoint -> %w", err)
+	}
+	return nil
 }
 
 func (c *kCollector) push(meta *LogMeta) {
@@ -138,6 +150,7 @@ func (c *kCollector) roll() {
 
 func (c *kCollector) join() {
 	c.joining = true
+	// TODO: make sure data is collectted
 }
 
 func (c *kCollector) contain(meta *LogMeta) bool {

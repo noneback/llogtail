@@ -14,6 +14,8 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+const kNotifyEventLimit = 500
+
 type Event struct {
 	e    LogFileEvent
 	meta *LogMeta
@@ -86,7 +88,7 @@ type LogWatcher struct {
 	pollerCloseC chan struct{}
 	// windows        map[string]uint64       // filepath -> window  two fsnotify op, new op in low bits, file path -> window
 	eventFilter    map[string]LogFileEvent // filepath -> event, fifo
-	lastSentTs     time.Time
+	lastSentTs     map[string]time.Time
 	filterInterval time.Duration
 	pollerInterval time.Duration
 	renameLock     sync.Mutex
@@ -106,7 +108,7 @@ func NewLogWatcher(option *LogWatchOption) *LogWatcher {
 		// windows:        map[string]uint64{},
 		closeC:         nil,
 		pollerCloseC:   nil,
-		lastSentTs:     time.Now().UTC().Local(),
+		lastSentTs:     make(map[string]time.Time),
 		eventFilter:    make(map[string]LogFileEvent),
 		filterInterval: option.FilterInterval,
 		pollerInterval: option.PollerInterval,
@@ -149,6 +151,7 @@ func (lw *LogWatcher) eventHandler() {
 			if !ok {
 				break
 			}
+
 			logger.Debugf("LogWatcher watcher.Events %v\n", e)
 			if err := lw.handleEvent(e.Name, eventTransform(e.Op)); err != nil {
 				logger.Errorf("eventHandler handle event -> %v\n", err)
@@ -248,24 +251,28 @@ func (lw *LogWatcher) handleRenameRotate(meta *LogMeta) error {
 	return nil
 }
 
-// sendEvent send event to upper layer
+// sendEvent send event to upper layer, NOTICE: a blocking opt
 // sendEvent only in eventHandler
-// a blocking opt
 func (lw *LogWatcher) sendEvent(e LogFileEvent, meta *LogMeta) {
-	// TODO(link.xk): filter and compact event
 	lastEvent, ok := lw.eventFilter[meta.path]
-	defer func() { lw.eventFilter[meta.path] = e }()
+	defer func() {
+		lw.eventFilter[meta.path] = e
+		lw.lastSentTs[meta.path] = time.Now().Local().UTC()
+	}()
+
 	if ok && lastEvent == e {
-		if time.Since(lw.lastSentTs) < lw.filterInterval { // can be optimized by making a imprecise interval [interval-1，interval + 1], but current having it precisely.
-			// less than interval and same as last sent event, do not send
-			// log.Debug("sendEvent, event lasting, but not trigger")
-			return
+		lastSentTs := lw.lastSentTs[meta.path]
+		if len(lw.watcher.Events) >= kNotifyEventLimit { // start filter if notify event piled up
+			if time.Since(lastSentTs) < lw.filterInterval { // can be optimized by making a imprecise interval [interval-1，interval + 1], but current having it precisely.
+				// less than interval and same as last sent event, do not send
+				logger.Debug("sendEvent, event lasting, but not trigger")
+				return
+			}
 		}
 	}
 	sendMeta := *meta // upper layer is using that address, which may change val in meta.To prevent implicit meta change, we send a copied one.
 	// event change or sent time triggered
 	lw.EventC <- &Event{e, &sendMeta} // TODO(link.xk): optimize it for update event
-	lw.lastSentTs = time.Now().Local().UTC()
 }
 
 func (lw *LogWatcher) handleEvent(path string, e LogFileEvent) error {

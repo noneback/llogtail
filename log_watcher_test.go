@@ -302,9 +302,9 @@ func remove(path string) {
 // rotateLogs 对指定的日志文件进行轮转
 func rotate(logPath string) error {
 	currentTime := time.Now()
-	newLogName := fmt.Sprintf("%s.%d-%02d-%02dT%02d-%02d-%02d",
+	newLogName := fmt.Sprintf("%s.%d-%02d-%02dT%02d-%02d-%02d-%v",
 		logPath, currentTime.Year(), currentTime.Month(), currentTime.Day(),
-		currentTime.Hour(), currentTime.Minute(), currentTime.Second())
+		currentTime.Hour(), currentTime.Minute(), currentTime.Second(), currentTime.UnixNano())
 
 	err := os.Rename(logPath, newLogName)
 	if err != nil {

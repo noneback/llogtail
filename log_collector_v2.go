@@ -192,6 +192,10 @@ func (lc *LogCollector) handleEvent(event *Event) error {
 		if len(content) != 0 {
 			if err := lc.sink.Push(event.meta.path, content); err != nil {
 				logger.Errorf("sink data for %v -> %v", event.meta.path, err)
+			} else {
+				if err := c.checkpoint(); err != nil {
+					logger.Errorf("checkpoint for %v -> %v", event.meta.path, err)
+				}
 			}
 		} else {
 			logger.Warningf("sink: content is empty")
