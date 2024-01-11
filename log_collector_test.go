@@ -63,7 +63,7 @@ func TestLogCollector(t *testing.T) {
 
 	})
 
-	t.Run("Test Collector Rename Collector", func(t *testing.T) {
+	t.Run("Test Collector Rename Collect", func(t *testing.T) {
 		expected := make(map[string][]byte)
 		for i := 0; i < 10000; i++ {
 			mock := generateDataOneKB()
@@ -99,6 +99,39 @@ func TestLogCollector(t *testing.T) {
 		}
 	})
 
+	t.Run("Test Collector Restart", func(t *testing.T) {
+		collector.Close()
+		time.Sleep(time.Second)
+		collector.Init(*conf)
+		collector.Run()
+
+		expected := make(map[string][]byte)
+		for i := 0; i < 10000; i++ {
+			mock := generateDataOneKB()
+			path := kLogs[i%3]
+			seq := expected[path]
+
+			// logger.Debugf("mock -> %v to %v", string(mock[:10]), path)
+			seq = append(seq, mock...)
+			expected[path] = seq
+			appendf(path, mock)
+		}
+		sconf, err := readFileSinkConf("./tests/sink.json")
+		if err != nil {
+			logger.Errorf("read sink conf -> %w", err)
+			t.FailNow()
+		}
+
+		got, _ := kGetCollectorContent(sconf.Dst)
+		gexpected = kJoinData(gexpected, expected)
+		ggot = kJoinData(ggot, got)
+
+		if err := kCheckContent(gexpected, ggot); err != nil {
+			logger.Errorf("check content -> %v", err.Error())
+			t.FailNow()
+		}
+	})
+
 }
 
 func kGetCollectorContent(target string) (map[string][]byte, error) {
@@ -117,10 +150,6 @@ func kGetCollectorContent(target string) (map[string][]byte, error) {
 		}
 		got[unit.File] = append(got[unit.File], unit.Content...)
 	}
-
-	// for k, v := range got {
-	// 	logger.Infof("got[%v] = %v", k, UnsafeSliceToString(v))
-	// }
 	return got, nil
 }
 

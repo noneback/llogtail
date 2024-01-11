@@ -2,7 +2,6 @@ package llogtail
 
 import (
 	"crypto/md5"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -126,14 +125,6 @@ func eventTransform(opkind fsnotify.Op) LogFileEvent {
 	return LogFileEventNotEncoded
 }
 
-// gen cpt path, path is log file path
-func genCptPath(path string) string {
-	hash := md5.Sum([]byte(path))
-	checksum := []byte{hash[0], hash[1], hash[2], hash[3]}
-	cptPath := filepath.Join(kOffsetDir, hex.EncodeToString(checksum)) + kCheckpointFileExt
-	return cptPath
-}
-
 func validateCpt(cpt *kCheckpoint, meta *LogMeta) bool {
 	if cpt.Meta.Dev == meta.fMeta.Dev && cpt.Meta.Inode == meta.fMeta.Inode && cpt.Offset <= uint64(meta.LogInfo.Size()) { // TODO: hash
 		return true
@@ -243,18 +234,18 @@ func makeCheckpoint(path string, meta *FileMeta, offset uint64) (*kCheckpoint, e
 	file, err := os.Create(path) // create a new one or truncate file
 	cpt := &kCheckpoint{*meta, uint64(offset), meta.fd.Name()}
 	if err != nil {
-		return nil, fmt.Errorf("makeCheckpoint create or open checkpoint file %v -> %w", path, err)
+		return nil, fmt.Errorf("create or open checkpoint file %v -> %w", path, err)
 	}
 	defer file.Close()
 	content, err := json.Marshal(cpt)
 	if err != nil {
-		return nil, fmt.Errorf("makeCheckpoint Marshal -> %w", err)
+		return nil, fmt.Errorf("Marshal -> %w", err)
 	}
 	// create a new file
 	if err := os.WriteFile(path, content, os.ModeAppend); err != nil {
-		return nil, fmt.Errorf("makeCheckpoint write cpt file %v -> %w", path, err)
+		return nil, fmt.Errorf("write cpt file %v -> %w", path, err)
 	}
-	// log.Println("makeCheckpoint success, path %v, file %v",path, meta.fd.Name())
+	logger.Infof("makeCheckpoint success, path %v, file %v", path, meta.fd.Name())
 	return cpt, nil
 }
 

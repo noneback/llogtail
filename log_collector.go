@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"time"
 )
@@ -83,6 +84,14 @@ func NewLogCollector() *LogCollector {
 // Once Log File is register, it cannot be changed or added. Log path registers only when it inits.
 func (lc *LogCollector) Init(conf LogConf) error {
 	lc.conf = conf
+	if err := os.MkdirAll(conf.Dir, 0755); err != nil {
+		return fmt.Errorf("mkdir %v -> %w", conf.Dir, err)
+	}
+	offsetDir := filepath.Join(conf.Dir, kOffsetDir)
+	if err := os.MkdirAll(offsetDir, 0755); err != nil {
+		return fmt.Errorf("mkdir %v -> %w", offsetDir, err)
+	}
+
 	lc.watcher = NewLogWatcher(&LogWatchOption{
 		time.Duration(conf.Watcher.FilterInterval) * time.Second, time.Duration(conf.Watcher.PollerInterval) * time.Second,
 	})
@@ -151,7 +160,7 @@ func (lc *LogCollector) handleEvent(event *Event) error {
 		// Triggered when log file firstly decovered
 		// Start a new collector and fire it
 		logger.Debugf("DiscoverFile %v, inode %v", event.meta.fMeta.fd.Name(), event.meta.fMeta.Inode)
-		handle := newCollector(event.meta)
+		handle := newCollector(lc.conf.Dir, event.meta)
 		if err := handle.init(); err != nil {
 			return fmt.Errorf("collect init -> %w", err)
 		}

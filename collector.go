@@ -1,10 +1,13 @@
 package llogtail
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/eapache/queue"
 )
@@ -17,6 +20,7 @@ const kDefaultLineSep = "\n"
 
 // single file collector handle
 type kCollector struct {
+	workdir  string
 	fpath    string        // file path
 	task     *kTaskContext // current collect task
 	waitting *queue.Queue  // wait to be collect, *LogReader
@@ -30,8 +34,9 @@ type kTaskContext struct {
 	meta   *LogMeta // Note: it is a snapshot, rather than a real-time status
 }
 
-func newCollector(meta *LogMeta) *kCollector {
+func newCollector(workdir string, meta *LogMeta) *kCollector {
 	return &kCollector{
+		workdir:  workdir,
 		fpath:    meta.path,
 		waitting: queue.New(),
 		buf:      NewBlockingBuffer(DefaultLogBufferSize),
@@ -45,7 +50,7 @@ func newCollector(meta *LogMeta) *kCollector {
 }
 
 func (c *kCollector) init() error {
-	cptPath := genCptPath(c.fpath)
+	cptPath := c.genCptPath(c.fpath)
 
 	cpt, err := readCheckpoint(cptPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -109,7 +114,7 @@ func (c *kCollector) fetch() ([]byte, error) {
 }
 
 func (c *kCollector) checkpoint() (err error) {
-	cptPath := genCptPath(c.fpath)
+	cptPath := c.genCptPath(c.fpath)
 	_, err = makeCheckpoint(cptPath, c.task.meta.fMeta, c.cpt.Offset)
 	if err != nil {
 		return fmt.Errorf("make checkpoint -> %w", err)
@@ -170,4 +175,13 @@ func (c *kCollector) contain(meta *LogMeta) bool {
 
 func (c *kCollector) sink() error {
 	return nil
+}
+
+// gen cpt path, path is log file path
+func (c *kCollector) genCptPath(path string) string {
+	hash := md5.Sum([]byte(path))
+	checksum := []byte{hash[0], hash[1], hash[2], hash[3]}
+	cptPath := filepath.Join(c.workdir, kOffsetDir, hex.EncodeToString(checksum)) + kCheckpointFileExt
+	logger.Warning(cptPath, c.workdir)
+	return cptPath
 }

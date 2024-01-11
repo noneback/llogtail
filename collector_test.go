@@ -28,7 +28,7 @@ func TestCollector(t *testing.T) {
 		logger.Errorf("mock log meta -> %v", err)
 		t.FailNow()
 	}
-	c := newCollector(meta)
+	c := newCollector("./", meta)
 	t.Run("Test Collector Init", func(t *testing.T) {
 		if err := c.init(); err != nil {
 			logger.Errorf("init -> %v", err)
