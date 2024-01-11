@@ -39,7 +39,7 @@ func newCollector(workdir string, meta *LogMeta) *kCollector {
 		workdir:  workdir,
 		fpath:    meta.path,
 		waitting: queue.New(),
-		buf:      NewBlockingBuffer(DefaultLogBufferSize),
+		buf:      NewBlockingBuffer(kDefaultLogBufferSize),
 		task: &kTaskContext{
 			offset: 0,
 			meta:   meta,
@@ -75,7 +75,7 @@ func (c *kCollector) fetch() ([]byte, error) {
 	fd := c.task.meta.fMeta.fd
 	// set offset
 	if _, err := fd.Seek(int64(c.cpt.Offset), io.SeekStart); err != nil {
-		return nil, fmt.Errorf("%v seek offset  -> %w", fd.Name(), err)
+		return nil, fmt.Errorf("seek offset %v to %v -> %w", fd.Name(), c.cpt.Offset, err)
 	}
 
 	n, err := c.buf.ReadLinesFrom(fd, kDefaultLineSep)

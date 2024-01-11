@@ -120,7 +120,7 @@ func (lc *LogCollector) Run() error {
 	go lc.runBackground()
 
 	if err := lc.watcher.RegisterAndWatch(lc.conf.Dir, lc.conf.Pattern); err != nil {
-		lc.Close()
+		defer lc.Close()
 		return fmt.Errorf("[LogCollector] Init RegisterAndWatch -> %w", err)
 	}
 	return nil
@@ -139,7 +139,7 @@ func (lc *LogCollector) listenEvent() {
 		select {
 		case e := <-lc.watcher.EventC:
 			if err := lc.handleEvent(e); err != nil {
-				logger.Errorf("[LogCollector] listenEvent, err %v", err.Error())
+				logger.Errorf("[LogCollector] handleEvent -> %v", err.Error())
 			}
 		case <-ticker.C:
 			// avoid log collect no progress lockdown to long
@@ -159,6 +159,13 @@ func (lc *LogCollector) handleEvent(event *Event) error {
 	case LogFileDiscover:
 		// Triggered when log file firstly decovered
 		// Start a new collector and fire it
+		if kc, ok := lc.collectors[path]; ok {
+			if kc.contain(event.meta) {
+				kc.push(event.meta) // a log come with same pattern and fname, take it as a rotation
+			}
+			return nil
+		}
+
 		logger.Debugf("DiscoverFile %v, inode %v", event.meta.fMeta.fd.Name(), event.meta.fMeta.Inode)
 		handle := newCollector(lc.conf.Dir, event.meta)
 		if err := handle.init(); err != nil {

@@ -242,6 +242,7 @@ func TestLogWatcher(t *testing.T) {
 	t.Run("Test Watcher Poller", func(t *testing.T) {
 		defer receiver.Draining()
 		Pre()
+		receiver.Draining()
 		logger.Notice("Sleep for Poller")
 		time.Sleep(kPoller + time.Second)
 
@@ -259,6 +260,30 @@ func TestLogWatcher(t *testing.T) {
 		}
 	})
 
+	t.Run("Test Watcher Lazy Logger", func(t *testing.T) {
+		defer receiver.Draining()
+		Pre()
+		receiver.Draining()
+		os.Create("./tests/tt.log")
+		logger.Notice("Sleep for Poller")
+		time.Sleep(kPoller + time.Second)
+
+		if err := receiver.Match([]kSimEvent{
+			{
+				"tests/error.log", LogFileRenameRotate,
+			}, {
+				"tests/info.log", LogFileRenameRotate,
+			}, {
+				"tests/warn.log", LogFileRenameRotate,
+			},
+			{
+				"tests/tt.log", LogFileDiscover,
+			},
+		}); err != nil {
+			logger.Error("Event not Match", err)
+			t.FailNow()
+		}
+	})
 }
 
 var kDataOneKB = generateDataOneKB()

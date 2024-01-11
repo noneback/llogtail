@@ -1,0 +1,13 @@
+{
+	"dir": "./",
+	"pattern": "*.log",
+	"lineSeperator": "\n",
+	"sink": {
+		"type": "file",
+		"config": "./sink.json"
+	},
+	"watcher": {
+		"filter": 1,
+		"poller": 3
+	}
+}

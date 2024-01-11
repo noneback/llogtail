@@ -30,7 +30,7 @@ var defauleLogOption = LogOption{
 }
 
 func init() {
-	// InitLogger(&defauleLogOption)
+	InitLogger(&defauleLogOption)
 }
 
 func genFileSign(file *os.File) (*[16]byte, error) {

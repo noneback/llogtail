@@ -79,19 +79,17 @@ type FileMeta struct {
 // Step 2, Watcher Events. Event is passed to LogWatcher via a chan. LogWatcher will transform raw event into LogFileEvent based on some pattern(linux only at now) or File's status. Specially, when file is removed, we consider it a mistake and put path into poller quere so that it will be rewatcher when poller triggers.
 // Step 3: Send Event.
 type LogWatcher struct {
-	pathMap      map[uint32]string   // id -> file path
-	logMetas     map[string]*LogMeta // file path -> LogMeta？ registerd log file meta
-	watcher      *fsnotify.Watcher
-	EventC       chan *Event
-	nextID       uint32
-	closeC       chan struct{}
-	pollerCloseC chan struct{}
-	// windows        map[string]uint64       // filepath -> window  two fsnotify op, new op in low bits, file path -> window
+	logMetas       map[string]*LogMeta // file path -> LogMeta？ registerd log file meta
+	watcher        *fsnotify.Watcher
+	EventC         chan *Event
+	closeC         chan struct{}
+	pollerCloseC   chan struct{}
 	eventFilter    map[string]LogFileEvent // filepath -> event, fifo
-	lastSentTs     map[string]time.Time
+	lastSentTs     map[string]time.Time    // fpath -> ts
 	filterInterval time.Duration
 	pollerInterval time.Duration
-	renameLock     sync.Mutex
+	locker         sync.Mutex
+	dir, pattern   string
 }
 
 type LogWatchOption struct {
@@ -101,8 +99,6 @@ type LogWatchOption struct {
 
 func NewLogWatcher(option *LogWatchOption) *LogWatcher {
 	return &LogWatcher{
-		nextID:   0,
-		pathMap:  make(map[uint32]string),
 		EventC:   make(chan *Event),
 		logMetas: make(map[string]*LogMeta), // path -> LogMeta
 		// windows:        map[string]uint64{},
@@ -181,17 +177,33 @@ func (lw *LogWatcher) poller() {
 	for {
 		select {
 		case <-poll_ticker.C:
+			lw.locker.Lock()
 			logger.Debug("poll_ticker trigger")
-			// poller based on pattern
-			// path from meta
-			for _, meta := range lw.logMetas {
-				if err := lw.handleRenameRotate(meta); err != nil { // action as it is a rename opt
-					logger.Warning("[poller] handle poller task failed", err)
-					continue
-				} // handle it as a rename event
-				logger.Infof("[poller] handle poll_ticker task success, file %v", meta.path)
+			// poller based on pattern, path from meta
+			logFiles, pathList, err := findFiles(lw.dir, lw.pattern)
+			if err != nil {
+				logger.Warning("[poller] findFiles failed", err)
+				continue
 			}
 
+			for i, path := range pathList {
+				if meta, ok := lw.logMetas[path]; ok {
+					if err := lw.handleRenameRotate(meta); err != nil { // action as it is a rename opt
+						logger.Warning("[poller] handle poller task failed", err)
+						continue
+					} // handle it as a rename event
+					logger.Infof("[poller] handle poll_ticker task success, file %v", meta.path)
+				} else {
+					if err := lw.kRegisterAndWatchSingleFile(path, &logFiles[i]); err != nil {
+						logger.Warningf("[poller] register file %v failed %v", path, err)
+					}
+					logger.Notice("Poller Discover", path)
+					lw.sendEvent(LogFileDiscover, lw.logMetas[path])
+					logger.Notice("Poller Discover Done", path)
+				}
+			}
+
+			lw.locker.Unlock()
 		case <-lw.pollerCloseC:
 			logger.Notice("poller Close")
 			return
@@ -214,9 +226,6 @@ func (lw *LogWatcher) handleRemoved(meta *LogMeta) error {
 // 2. update log meta
 // 3. send evnet to upper layer
 func (lw *LogWatcher) handleRenameRotate(meta *LogMeta) error {
-	lw.renameLock.Lock()
-	defer lw.renameLock.Unlock()
-
 	var (
 		fInfo fs.FileInfo
 		err   error
@@ -338,12 +347,35 @@ func genLogMeta(logFile fs.FileInfo, path, dir, pattern string) (*LogMeta, error
 	}, nil
 }
 
+// NOTICE: just register meta, do not send event
+func (lw *LogWatcher) kRegisterAndWatchSingleFile(path string, logf *fs.FileInfo) error {
+	meta, err := genLogMeta(*logf, path, lw.dir, lw.pattern)
+	if err != nil {
+		return fmt.Errorf("gen log meta %v -> %w", path, err)
+	}
+
+	if _, ok := lw.logMetas[path]; !ok {
+		lw.logMetas[path] = meta
+	}
+
+	if err = lw.watcher.Add(path); err != nil {
+		return fmt.Errorf("watcher add %v -> %w", path, err)
+	}
+	logger.Notice("[RegisterAndWatchSingleFile] file meta registerd", path)
+	return nil
+}
+
+// RegisterAndWatch find files and register and watch them
 func (lw *LogWatcher) RegisterAndWatch(dir, pattern string) error {
+	lw.locker.Lock()
+	defer lw.locker.Unlock()
+
 	var (
 		logFiles []fs.FileInfo
 		pathList []string
 		err      error
 	)
+	lw.dir, lw.pattern = dir, pattern
 
 	if logFiles, pathList, err = findFiles(dir, pattern); err != nil {
 		return fmt.Errorf("[LogWatcher] Register failed -> %w", err)
@@ -352,19 +384,10 @@ func (lw *LogWatcher) RegisterAndWatch(dir, pattern string) error {
 	for i := range logFiles {
 		logFile := logFiles[i]
 		path := pathList[i]
+		lw.kRegisterAndWatchSingleFile(path, &logFile)
+	}
 
-		meta, err := genLogMeta(logFile, path, dir, pattern)
-		if err != nil {
-			return fmt.Errorf("[RegisterAndWatch] gen log meta failed, dir %v, pattern %v, path %v, err -> %w", dir, pattern, path, err)
-		}
-
-		lw.logMetas[path] = meta
-		if err = lw.watcher.Add(path); err != nil {
-			return fmt.Errorf("[RegisterAndWatch] Add file %v to watcher failed -> %w", logFile.Name(), err)
-		}
-		logger.Debug("[RegisterAndWatch] file registerd", path)
-		lw.pathMap[lw.nextID] = path
-		lw.nextID++
+	for path := range lw.logMetas {
 		defer lw.sendEvent(LogFileDiscover, lw.logMetas[path]) // NOTICE: Defer make sure inform uppper layer is in batch
 	}
 	return nil

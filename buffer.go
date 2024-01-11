@@ -29,10 +29,10 @@ func encodeDataUnit(ctx *kTaskContext, content []byte) ([]byte, error) {
 }
 
 const (
-	DefaultLogBufferSize = MB + 1048
-	MaxBufferSize        = 4 * MB
-	MB                   = 1024 * 1024
-	KB                   = 1024
+	kDefaultLogBufferSize = MB
+	MaxBufferSize         = 4 * MB
+	MB                    = 1024 * 1024
+	KB                    = 1024
 )
 
 // BlockingBuffer is a thread-safe buffer, with blocking api.
